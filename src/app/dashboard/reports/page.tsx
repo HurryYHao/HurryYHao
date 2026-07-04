@@ -184,11 +184,12 @@ export default function ReportsPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* 主内容区：左右分栏，自适应填满视口高度 */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6" style={{ minHeight: 'calc(100vh - 260px)' }}>
         {/* 左侧：会话列表（按主播过滤） */}
-        <div className="lg:col-span-1">
-          <Card>
-            <CardHeader className="pb-2">
+        <div className="lg:col-span-1 flex flex-col">
+          <Card className="flex flex-col flex-1">
+            <CardHeader className="pb-2 shrink-0">
               <CardTitle className="text-base flex items-center gap-2">
                 {selectedAnchor || '全部主播'}
                 {selectedAnchor === '雅文老师' && (
@@ -196,15 +197,15 @@ export default function ReportsPage() {
                 )}
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <ScrollArea className="h-[600px]">
+            <CardContent className="flex-1 min-h-0">
+              <ScrollArea className="h-full max-h-[calc(100vh-300px)]">
                 {filteredSessions.length === 0 ? (
                   <div className="text-center py-8 text-muted-foreground">
                     <FileText className="h-8 w-8 mx-auto mb-2 opacity-30" />
                     <p className="text-sm">暂无分析会话</p>
                   </div>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="space-y-2 pr-1">
                     {filteredSessions.map(s => (
                       <div
                         key={s.id}
@@ -212,12 +213,9 @@ export default function ReportsPage() {
                         className={`p-3 rounded-lg border cursor-pointer transition-colors ${selectedSession?.id === s.id ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'}`}
                       >
                         <div className="flex items-center gap-2">
-                          <span className="font-medium text-sm truncate flex-1">{s.template_name || s.room_name || s.room_id}</span>
+                          <span className="font-medium text-sm truncate flex-1">{s.room_name || s.template_name || s.room_id}</span>
                           <Badge variant="outline" className="text-xs shrink-0">{s.status}</Badge>
                         </div>
-                        {s.template_name && (
-                          <Badge variant="secondary" className="text-xs mt-1">{s.template_name}</Badge>
-                        )}
                         <div className="text-xs text-muted-foreground mt-1">
                           {s.start_time ? new Date(s.start_time).toLocaleString('zh-CN') : '--'}
                         </div>
@@ -231,14 +229,14 @@ export default function ReportsPage() {
         </div>
 
         {/* 右侧：报告列表 */}
-        <div className="lg:col-span-2">
-          <Card>
-            <CardHeader className="pb-2">
+        <div className="lg:col-span-2 flex flex-col">
+          <Card className="flex flex-col flex-1">
+            <CardHeader className="pb-2 shrink-0">
               <CardTitle className="text-base">
-                {selectedSession ? `${selectedSession.template_name || selectedSession.room_name || selectedSession.room_id} 的报告` : '请选择会话'}
+                {selectedSession ? `${selectedSession.room_name || selectedSession.template_name || selectedSession.room_id} 的报告` : '请选择会话'}
               </CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="flex-1 min-h-0">
               {!selectedSession ? (
                 <div className="text-center py-12 text-muted-foreground">
                   <FileText className="h-12 w-12 mx-auto mb-3 opacity-20" />
@@ -252,8 +250,8 @@ export default function ReportsPage() {
                   <p className="text-xs mt-1">可以在监控页面手动触发分析</p>
                 </div>
               ) : (
-                <ScrollArea className="h-[600px]">
-                  <div className="space-y-3">
+                <ScrollArea className="h-full max-h-[calc(100vh-300px)]">
+                  <div className="space-y-3 pr-1">
                     {reports.map(report => (
                       <div
                         key={report.id}
@@ -312,9 +310,19 @@ export default function ReportsPage() {
                             })}
                           </div>
                         )}
-                        <p className="text-sm text-muted-foreground line-clamp-2">
-                          {report.analysis_text ? report.analysis_text.slice(0, 120) + '...' : '无内容'}
-                        </p>
+                        {/* 报告内容预览：展示前300字符，点击查看完整 */}
+                        <div className="text-sm text-muted-foreground">
+                          {report.analysis_text ? (
+                            <div className="relative">
+                              <p className="line-clamp-4">
+                                {report.analysis_text.replace(/^#+\s*/gm, '').replace(/---/g, '').replace(/\n{2,}/g, '\n').slice(0, 300)}
+                              </p>
+                              <span className="text-primary text-xs ml-1 hover:underline">点击查看完整报告 →</span>
+                            </div>
+                          ) : (
+                            <span>无内容</span>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
