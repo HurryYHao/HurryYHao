@@ -488,7 +488,9 @@ async function generateProductBattleCard(goodsName: string): Promise<void> {
     totalClicks: 0,
     totalOrders: 0,
     totalPaid: 0,
-    totalAmount: 0
+    totalAmount: 0,
+    orderedUsers: new Set(),
+    paidUsers: new Set()
   };
 
   for (const snapshot of (snapshotData || [])) {
@@ -502,15 +504,26 @@ async function generateProductBattleCard(goodsName: string): Promise<void> {
         if (itemName === goodsName || goodsName.includes(itemName) || itemName.includes(goodsName)) {
           productStats.totalSessions.add((snapshot as any).session_id);
           
-          const clickCount = Number(orderItem.clickCount || orderItem.click_count || 0);
-          const orderCount = Number(orderItem.orderCount || orderItem.order_count || 0);
-          const paidCount = Number(orderItem.paidCount || orderItem.paid_count || 0);
-          const payAmount = Number(orderItem.payAmount || orderItem.pay_amount || 0);
+          const userId = orderItem.userId || orderItem.liveMemberId || '';
+          const clickCount = Number(orderItem.clickCount || 0);
+          const buyCount = Number(orderItem.buyCount || 0);
+          const payStatus = orderItem.payStatus || '';
+          const payPrice = Number(orderItem.payPrice || 0);
           
           productStats.totalClicks += clickCount;
-          productStats.totalOrders += orderCount;
-          productStats.totalPaid += paidCount;
-          productStats.totalAmount += payAmount;
+          
+          // 下单人数统计（去重）
+          if (buyCount > 0 && userId && !productStats.orderedUsers.has(userId)) {
+            productStats.orderedUsers.add(userId);
+            productStats.totalOrders += 1;
+          }
+          
+          // 支付人数和销售额统计（去重）
+          if (payStatus === 'SUCCESS' && userId && !productStats.paidUsers.has(userId)) {
+            productStats.paidUsers.add(userId);
+            productStats.totalPaid += 1;
+            productStats.totalAmount += payPrice;
+          }
           
           productHistory.push({
             id: (snapshot as any).id,
@@ -519,9 +532,9 @@ async function generateProductBattleCard(goodsName: string): Promise<void> {
             snapshot_time: (snapshot as any).snapshot_time,
             goods_name: itemName,
             click_count: clickCount,
-            order_count: orderCount,
-            paid_count: paidCount,
-            pay_amount: payAmount,
+            order_count: buyCount > 0 ? 1 : 0,
+            paid_count: payStatus === 'SUCCESS' ? 1 : 0,
+            pay_amount: payStatus === 'SUCCESS' ? payPrice : 0,
             live_sessions: (snapshot as any).live_sessions
           });
         }
