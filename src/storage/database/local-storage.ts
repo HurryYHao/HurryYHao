@@ -456,43 +456,59 @@ const storage = {
   }
 };
 
+// 延迟保存定时器（避免频繁写入）
+let saveTimer: NodeJS.Timeout | null = null;
+const SAVE_DELAY_MS = 5000; // 5秒延迟
+
 // 保存数据到文件
 function saveToFile() {
-  try {
-    const filePath = path.join(DATA_DIR, 'storage.json');
-    const tempPath = `${filePath}.tmp`;
-    
-    // 自定义 replacer 来处理 BigInt
-    const replacer = (key: string, value: any) => {
-      if (typeof value === 'bigint') {
-        return value.toString();
-      }
-      return value;
-    };
-    
-    // 先写入临时文件，确保原子性
-    fs.writeFileSync(tempPath, JSON.stringify(storage, replacer, 2), { mode: 0o644 });
-    
-    // 原子性重命名
-    if (fs.existsSync(filePath)) {
-      fs.renameSync(filePath, `${filePath}.bak`);
-    }
-    fs.renameSync(tempPath, filePath);
-    
-    // 清理旧备份文件
-    const backupPath = `${filePath}.bak`;
-    if (fs.existsSync(backupPath)) {
-      try {
-        fs.unlinkSync(backupPath);
-      } catch {
-        // 忽略清理错误
-      }
-    }
-    
-    console.log(`[Storage] Data saved successfully to ${filePath}`);
-  } catch (error) {
-    console.error('[Storage] Failed to save data to file:', error);
+  // 使用 debounce 机制：延迟保存，避免频繁写入
+  if (saveTimer) {
+    // 如果已有定时器，则重置（延迟重新计算）
+    clearTimeout(saveTimer);
   }
+  
+  saveTimer = setTimeout(() => {
+    try {
+      const filePath = path.join(DATA_DIR, 'storage.json');
+      const tempPath = `${filePath}.tmp`;
+      
+      // 自定义 replacer 来处理 BigInt
+      const replacer = (key: string, value: any) => {
+        if (typeof value === 'bigint') {
+          return value.toString();
+        }
+        return value;
+      };
+      
+      // 先写入临时文件，确保原子性
+      fs.writeFileSync(tempPath, JSON.stringify(storage, replacer, 2), { mode: 0o644 });
+      
+      // 原子性重命名
+      if (fs.existsSync(filePath)) {
+        fs.renameSync(filePath, `${filePath}.bak`);
+      }
+      fs.renameSync(tempPath, filePath);
+      
+      // 清理旧备份文件
+      const backupPath = `${filePath}.bak`;
+      if (fs.existsSync(backupPath)) {
+        try {
+          fs.unlinkSync(backupPath);
+        } catch {
+          // 忽略清理错误
+        }
+      }
+      
+      saveTimer = null; // 保存完成后清除定时器
+      
+      // 只在真正保存时输出日志（每5秒最多一次）
+      console.log(`[Storage] Data saved to ${filePath}`);
+    } catch (error) {
+      console.error('[Storage] Failed to save data to file:', error);
+      saveTimer = null;
+    }
+  }, SAVE_DELAY_MS);
 }
 
 // 从文件加载数据
@@ -521,6 +537,28 @@ function loadFromFile() {
 
 // 初始化时加载数据
 loadFromFile();
+
+// 进程退出时强制保存（确保数据不丢失）
+process.on('beforeExit', () => {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    // 直接保存，不延迟
+    const filePath = path.join(DATA_DIR, 'storage.json');
+    try {
+      const tempPath = `${filePath}.tmp`;
+      const replacer = (key: string, value: any) => {
+        if (typeof value === 'bigint') return value.toString();
+        return value;
+      };
+      fs.writeFileSync(tempPath, JSON.stringify(storage, replacer, 2), { mode: 0o644 });
+      if (fs.existsSync(filePath)) fs.renameSync(filePath, `${filePath}.bak`);
+      fs.renameSync(tempPath, filePath);
+      console.log('[Storage] Final save on exit');
+    } catch (e) {
+      console.error('[Storage] Final save failed:', e);
+    }
+  }
+});
 
 // 创建一个模拟的 Supabase 风格查询接口
 class LocalTable<T extends { id: number }> {
