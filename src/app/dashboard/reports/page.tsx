@@ -61,36 +61,7 @@ export default function ReportsPage() {
   const [reportsLoading, setReportsLoading] = useState(false);
   const [selectedAnchor, setSelectedAnchor] = useState<string | null>(null);
 
-  const fetchSessions = useCallback(async () => {
-    try {
-      const res = await fetch('/api/sessions?page=1&pageSize=50');
-      const json = await res.json();
-      if (json.success) {
-        const sessionList: Session[] = json.data.sessions || [];
-        setSessions(sessionList);
-        // 自动选择第一个主播
-        if (sessionList.length > 0 && !selectedAnchor) {
-          const firstAnchor = sessionList[0].anchor_name || '未知主播';
-          setSelectedAnchor(firstAnchor);
-        }
-      }
-    } catch { toast.error('获取会话失败'); }
-    finally { setLoading(false); }
-  }, [selectedAnchor]);
-
-  useEffect(() => { fetchSessions(); }, [fetchSessions]);
-
-  // 按主播分组
-  const anchorGroups = sessions.reduce<Record<string, Session[]>>((acc, s) => {
-    const anchor = s.anchor_name || '未知主播';
-    if (!acc[anchor]) acc[anchor] = [];
-    acc[anchor].push(s);
-    return acc;
-  }, {});
-
-  const anchorNames = Object.keys(anchorGroups);
-  const filteredSessions = selectedAnchor ? (anchorGroups[selectedAnchor] || []) : sessions;
-
+  // 先定义fetchReports
   const fetchReports = async (sessionId: number) => {
     setReportsLoading(true);
     try {
@@ -109,6 +80,39 @@ export default function ReportsPage() {
       setReportsLoading(false);
     }
   };
+
+  const fetchSessions = useCallback(async () => {
+    try {
+      const res = await fetch('/api/sessions?page=1&pageSize=50');
+      const json = await res.json();
+      if (json.success) {
+        const sessionList: Session[] = json.data.sessions || [];
+        setSessions(sessionList);
+        // 自动选择第一个主播和第一个会话
+        if (sessionList.length > 0) {
+          const firstAnchor = sessionList[0].anchor_name || '未知主播';
+          setSelectedAnchor(firstAnchor);
+          // 默认选择第一个会话并加载报告
+          setSelectedSession(sessionList[0]);
+          fetchReports(sessionList[0].id);
+        }
+      }
+    } catch { toast.error('获取会话失败'); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchSessions(); }, [fetchSessions]);
+
+  // 按主播分组
+  const anchorGroups = sessions.reduce<Record<string, Session[]>>((acc, s) => {
+    const anchor = s.anchor_name || '未知主播';
+    if (!acc[anchor]) acc[anchor] = [];
+    acc[anchor].push(s);
+    return acc;
+  }, {});
+
+  const anchorNames = Object.keys(anchorGroups);
+  const filteredSessions = selectedAnchor ? (anchorGroups[selectedAnchor] || []) : sessions;
 
   const handleSelectSession = (session: Session) => {
     setSelectedSession(session);
