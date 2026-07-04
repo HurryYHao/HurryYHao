@@ -455,6 +455,16 @@ export async function fetchAllSnapshotData(
     }
   }
 
+  // 提取并保存时间轴事件（从chartData中提取关键时间点）
+  // 获取session的开始时间
+  const { data: sessionData } = await client
+    .from('live_sessions')
+    .select('start_time')
+    .eq('id', sessionId)
+    .maybeSingle();
+
+  await extractAndSaveTimelineEvents(sessionId, chartData, sessionData?.start_time || null);
+
   console.info(`[Fetcher] 快照 #${seq} 写入成功: ${audienceComments.length}条评论, ${orderDetails.records.length}条订单`);
 }
 
@@ -643,6 +653,132 @@ export async function fetchLiveSpaceOptions(roomId: string): Promise<Array<{ id:
     method: 'GET',
   });
   return result.data || [];
+}
+
+// ==================== 时间轴事件提取 ====================
+
+/**
+ * 从分钟级图表数据中提取关键事件并保存到live_timeline_events表
+ */
+async function extractAndSaveTimelineEvents(
+  sessionId: number,
+  chartData: any,
+  startTime: string | null
+) {
+  if (!chartData || !startTime) {
+    console.info('[Timeline] 无图表数据或开始时间，跳过事件提取');
+    return;
+  }
+
+  const client = getSupabaseClient();
+  const events: Array<{
+    session_id: number;
+    timestamp: string;
+    offset_seconds: number;
+    event_type: string;
+    content: string;
+    metrics: Record<string, number>;
+    source: string;
+    importance: string;
+  }> = [];
+
+  // 解析开始时间
+  const startTs = new Date(startTime);
+  
+  // 提取在线人数峰值事件
+  if (chartData.online && Array.isArray(chartData.online)) {
+    const onlineData = chartData.online;
+    const peakIndex = onlineData.reduce((maxIdx: number, val: number, idx: number, arr: number[]) => 
+      val > arr[maxIdx] ? idx : maxIdx, 0);
+    const peakValue = onlineData[peakIndex];
+    
+    if (peakValue > 50) {  // 只记录超过50人的峰值
+      const peakTime = new Date(startTs.getTime() + peakIndex * 60000);
+      events.push({
+        session_id: sessionId,
+        timestamp: peakTime.toISOString(),
+        offset_seconds: peakIndex * 60,
+        event_type: 'online_peak',
+        content: `在线人数达到峰值 ${peakValue} 人`,
+        metrics: { online: peakValue },
+        source: 'chart',
+        importance: peakValue > 200 ? 'high' : 'medium',
+      });
+    }
+  }
+
+  // 提取评论高峰事件
+  if (chartData.commentUv && Array.isArray(chartData.commentUv)) {
+    const commentData = chartData.commentUv;
+    const peakIndex = commentData.reduce((maxIdx: number, val: number, idx: number, arr: number[]) => 
+      val > arr[maxIdx] ? idx : maxIdx, 0);
+    const peakValue = commentData[peakIndex];
+    
+    if (peakValue > 20) {  // 只记录超过20人评论的高峰
+      const peakTime = new Date(startTs.getTime() + peakIndex * 60000);
+      events.push({
+        session_id: sessionId,
+        timestamp: peakTime.toISOString(),
+        offset_seconds: peakIndex * 60,
+        event_type: 'interaction_peak',
+        content: `互动高峰，评论人数 ${peakValue} 人`,
+        metrics: { comments: peakValue },
+        source: 'chart',
+        importance: peakValue > 100 ? 'high' : 'medium',
+      });
+    }
+  }
+
+  // 提取支付爆发事件
+  if (chartData.payUv && Array.isArray(chartData.payUv)) {
+    const payData = chartData.payUv;
+    // 找支付人数增长率最高的时间点
+    let maxGrowthIdx = 0;
+    let maxGrowth = 0;
+    for (let i = 1; i < payData.length; i++) {
+      const growth = payData[i] - payData[i - 1];
+      if (growth > maxGrowth) {
+        maxGrowth = growth;
+        maxGrowthIdx = i;
+      }
+    }
+    
+    if (maxGrowth > 3) {  // 只记录增长超过3人的爆发
+      const peakTime = new Date(startTs.getTime() + maxGrowthIdx * 60000);
+      events.push({
+        session_id: sessionId,
+        timestamp: peakTime.toISOString(),
+        offset_seconds: maxGrowthIdx * 60,
+        event_type: 'payment_burst',
+        content: `支付爆发，新增支付人数 ${maxGrowth} 人`,
+        metrics: { pay_users: payData[maxGrowthIdx], growth: maxGrowth },
+        source: 'chart',
+        importance: maxGrowth > 10 ? 'high' : 'medium',
+      });
+    }
+  }
+
+  // 添加开播事件（offset_seconds = 0）
+  events.unshift({
+    session_id: sessionId,
+    timestamp: startTs.toISOString(),
+    offset_seconds: 0,
+    event_type: 'stream_start',
+    content: '直播正式开始',
+    metrics: {},
+    source: 'system',
+    importance: 'medium',
+  });
+
+  // 保存事件到数据库
+  if (events.length > 1) {  // 至少有1个关键事件（开播事件不算）
+    const { error } = await client.from('live_timeline_events').insert(events);
+    if (error) {
+      console.error('[Timeline] 保存事件失败:', error.message);
+    } else {
+      console.info(`[Timeline] 保存 ${events.length} 个关键事件（在线峰值、互动高峰、支付爆发等）`);
+    }
+  }
 }
 
 /**

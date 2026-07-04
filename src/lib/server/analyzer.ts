@@ -998,17 +998,92 @@ export function extractJsonAndMarkdown(analysisText: string) {
   return { json: jsonData, markdown };
 }
 
-/** 从分析文本中提取预警项 */
-function extractAlerts(analysisText: string, jsonData?: any): Array<{
+/** 从分析文本中提取预警项（并根据评分和数据自动生成） */
+function extractAlerts(analysisText: string, jsonData?: any, scores?: any, snapshots?: any[]): Array<{
   type: string;
   severity: string;
   title: string;
   description: string;
 }> {
+  const alerts: Array<{
+    type: string;
+    severity: string;
+    title: string;
+    description: string;
+  }> = [];
+
+  // 1. 从AI生成的JSON中提取预警
   if (jsonData && Array.isArray(jsonData.alerts)) {
-    return jsonData.alerts;
+    alerts.push(...jsonData.alerts);
   }
-  return [];
+
+  // 2. 根据评分自动生成预警（如果分数过低）
+  if (scores) {
+    // 转化预警（分数<7）
+    if (scores.conversion && scores.conversion < 7) {
+      alerts.push({
+        type: 'conversion',
+        severity: scores.conversion < 5 ? 'high' : 'medium',
+        title: '商品转化率偏低',
+        description: `转化维度评分仅 ${scores.conversion} 分，需优化商品展示和逼单话术。`,
+      });
+    }
+
+    // 舆情预警（分数<7）
+    if (scores.sentiment && scores.sentiment < 7) {
+      alerts.push({
+        type: 'sentiment',
+        severity: scores.sentiment < 5 ? 'high' : 'medium',
+        title: '评论舆情需关注',
+        description: `舆情维度评分 ${scores.sentiment} 分，存在负面评论需及时回应。`,
+      });
+    }
+
+    // 互动预警（分数<7）
+    if (scores.interaction && scores.interaction < 7) {
+      alerts.push({
+        type: 'interaction',
+        severity: scores.interaction < 5 ? 'medium' : 'low',
+        title: '互动热度不足',
+        description: `互动维度评分 ${scores.interaction} 分，建议增加互动环节和抽奖活动。`,
+      });
+    }
+  }
+
+  // 3. 根据快照数据自动生成预警（如果指标异常）
+  if (snapshots && snapshots.length > 0) {
+    const latestSnapshot = snapshots[snapshots.length - 1];
+    const rawJson = latestSnapshot.raw_json as any;
+
+    // 支付转化率预警（<5%）
+    const watchUv = rawJson?.chart?.watchUv || 0;
+    const payUv = rawJson?.chart?.payUv || 0;
+    if (watchUv > 100 && payUv > 0) {
+      const conversionRate = (payUv / watchUv) * 100;
+      if (conversionRate < 5) {
+        alerts.push({
+          type: 'conversion_rate',
+          severity: 'medium',
+          title: '支付转化率低于5%',
+          description: `观看${watchUv}人，支付${payUv}人，转化率仅${conversionRate.toFixed(2)}%，建议优化商品呈现和促销策略。`,
+        });
+      }
+    }
+
+    // 未支付订单预警（未支付>已支付）
+    const paidCount = rawJson?.orderSummary?.totalCount || 0;
+    const unpaidCount = rawJson?.orderSummary?.unpaidCount || 0;
+    if (paidCount > 0 && unpaidCount > paidCount) {
+      alerts.push({
+        type: 'unpaid_orders',
+        severity: 'medium',
+        title: '未支付订单积压',
+        description: `已支付${paidCount}笔，未支付${unpaidCount}笔，建议增加催单话术或限时优惠。`,
+      });
+    }
+  }
+
+  return alerts;
 }
 
 /** 从分析文本中提取可执行建议 */
@@ -1078,6 +1153,180 @@ async function saveActionItems(
   } else {
     console.info(`[ActionItems] 保存 ${items.length} 条建议 (session=${sessionId})`);
   }
+}
+
+// ==================== 主播画像生成 ====================
+
+/**
+ * 根据直播场次数据生成主播画像
+ * 终场分析完成后自动调用，将多场直播的数据汇总生成主播能力画像
+ */
+async function generateAnchorProfile(sessionId: number, anchorName: string) {
+  if (!anchorName || anchorName === '未知主播') {
+    console.info('[AnchorProfile] 主播名称未知，跳过画像生成');
+    return;
+  }
+
+  const client = getSupabaseClient();
+
+  // 获取该主播的所有直播场次数据
+  const { data: sessions } = await client
+    .from('live_sessions')
+    .select('id, room_name, start_time, end_time, status')
+    .eq('anchor_name', anchorName)
+    .eq('status', 'ended');
+
+  if (!sessions || sessions.length === 0) {
+    console.info(`[AnchorProfile] 主播 ${anchorName} 没有已结束的直播场次，跳过画像生成`);
+    return;
+  }
+
+  // 获取所有场次的分析报告
+  const sessionIds = sessions.map((s: any) => s.id);
+  const { data: reports } = await client
+    .from('analysis_reports')
+    .select('session_id, overall_score, anchor_score, interaction_score, conversion_score, sentiment_score, rhythm_score, analysis_json')
+    .in('session_id', sessionIds)
+    .eq('report_type', 'final');
+
+  if (!reports || reports.length === 0) {
+    console.info(`[AnchorProfile] 主播 ${anchorName} 没有终场分析报告，跳过画像生成`);
+    return;
+  }
+
+  // 计算平均指标
+  const avgScores = {
+    overall: average(reports.map((r: any) => r.overall_score || 0)),
+    anchor: average(reports.map((r: any) => r.anchor_score || 0)),
+    interaction: average(reports.map((r: any) => r.interaction_score || 0)),
+    conversion: average(reports.map((r: any) => r.conversion_score || 0)),
+    sentiment: average(reports.map((r: any) => r.sentiment_score || 0)),
+    rhythm: average(reports.map((r: any) => r.rhythm_score || 0)),
+  };
+
+  // 获取所有快照数据计算平均业务指标
+  const { data: snapshots } = await client
+    .from('snapshot_data')
+    .select('raw_json')
+    .in('session_id', sessionIds);
+
+  let avgSales = 0;
+  let avgViewers = 0;
+  let avgOnline = 0;
+  let avgConversionRate = 0;
+  let avgCommentRate = 0;
+
+  if (snapshots && snapshots.length > 0) {
+    const salesData = snapshots.map((s: any) => {
+      const raw = s.raw_json as any;
+      return raw?.chart?.payAmount || 0;
+    });
+    const viewersData = snapshots.map((s: any) => {
+      const raw = s.raw_json as any;
+      return raw?.chart?.watchUv || 0;
+    });
+    const onlineData = snapshots.map((s: any) => {
+      const raw = s.raw_json as any;
+      return raw?.chart?.online || 0;
+    });
+    const conversionData = snapshots.map((s: any) => {
+      const raw = s.raw_json as any;
+      const payUv = raw?.chart?.payUv || 0;
+      const watchUv = raw?.chart?.watchUv || 0;
+      return watchUv > 0 ? (payUv / watchUv) * 100 : 0;
+    });
+    const commentData = snapshots.map((s: any) => {
+      const raw = s.raw_json as any;
+      const commentUv = raw?.chart?.commentUv || 0;
+      const watchUv = raw?.chart?.watchUv || 0;
+      return watchUv > 0 ? (commentUv / watchUv) * 100 : 0;
+    });
+
+    avgSales = average(salesData);
+    avgViewers = average(viewersData);
+    avgOnline = average(onlineData);
+    avgConversionRate = average(conversionData);
+    avgCommentRate = average(commentData);
+  }
+
+  // 从分析报告中提取优缺点和最佳商品类型
+  const allStrengths: string[] = [];
+  const allWeaknesses: string[] = [];
+  const allProductTypes: string[] = [];
+
+  for (const report of reports) {
+    const jsonData = report.analysis_json as any;
+    if (jsonData?.strengths) allStrengths.push(...jsonData.strengths);
+    if (jsonData?.weaknesses) allWeaknesses.push(...jsonData.weaknesses);
+    if (jsonData?.best_product_types) allProductTypes.push(...jsonData.best_product_types);
+  }
+
+  // 统计频率，取最常见的
+  const topStrengths = getTopItems(allStrengths, 5);
+  const topWeaknesses = getTopItems(allWeaknesses, 3);
+  const topProductTypes = getTopItems(allProductTypes, 3);
+
+  // 更新或创建主播画像
+  const profileData = {
+    anchor_name: anchorName,
+    avg_sales: Math.round(avgSales * 100) / 100,
+    avg_viewers: Math.round(avgViewers),
+    avg_online: Math.round(avgOnline),
+    avg_conversion_rate: Math.round(avgConversionRate * 100) / 100,
+    avg_comment_rate: Math.round(avgCommentRate * 100) / 100,
+    avg_score: Math.round(avgScores.overall * 10) / 10,
+    dimension_scores: avgScores,
+    strengths: topStrengths,
+    weaknesses: topWeaknesses,
+    best_product_types: topProductTypes,
+    total_sessions: sessions.length,
+    updated_at: new Date().toISOString(),
+  };
+
+  // 检查是否已存在该主播的画像
+  const { data: existingProfile } = await client
+    .from('anchor_profiles')
+    .select('id')
+    .eq('anchor_name', anchorName)
+    .maybeSingle();
+
+  let error;
+  if (existingProfile) {
+    // 更新现有画像
+    const result = await client
+      .from('anchor_profiles')
+      .update(profileData)
+      .eq('id', existingProfile.id);
+    error = result.error;
+  } else {
+    // 创建新画像
+    const result = await client.from('anchor_profiles').insert(profileData);
+    error = result.error;
+  }
+
+  if (error) {
+    console.error(`[AnchorProfile] 保存主播画像失败:`, error.message);
+  } else {
+    console.info(`[AnchorProfile] 主播 ${anchorName} 画像已生成/更新 (${sessions.length}场直播汇总)`);
+  }
+}
+
+// 辅助函数：计算平均值
+function average(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+// 辅助函数：统计频率并取Top N
+function getTopItems(items: string[], topN: number): string[] {
+  const freq: Record<string, number> = {};
+  for (const item of items) {
+    freq[item] = (freq[item] || 0) + 1;
+  }
+  return Object.entries(freq)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topN)
+    .map(([item]) => item);
 }
 
 // ==================== Skill 自优化（知识积累系统） ====================
@@ -1568,7 +1817,7 @@ export async function runAnalysis(
   const dimensions = extractDimensions(markdownText);
   
   const scores = jsonData?.scores || {};
-  const alerts = extractAlerts(markdownText, jsonData);
+  const alerts = extractAlerts(markdownText, jsonData, scores, snapshots);
   const actionItems = extractActionItems(markdownText, jsonData);
   const highlights = extractHighlights(markdownText, jsonData);
 
@@ -1800,7 +2049,7 @@ export async function* streamAnalysis(
   const { json: jsonData, markdown: markdownText } = extractJsonAndMarkdown(fullText);
   const dimensions = extractDimensions(markdownText);
   const scores = jsonData?.scores || {};
-  const alerts = extractAlerts(markdownText, jsonData);
+  const alerts = extractAlerts(markdownText, jsonData, scores, snapshots);
   const actionItems = extractActionItems(markdownText, jsonData);
   const highlights = extractHighlights(markdownText, jsonData);
 
@@ -1847,6 +2096,11 @@ export async function* streamAnalysis(
   if (reportType === REPORT_TYPE.FINAL) {
     autoFillLiveScript(sessionId, anchorName, fullText, analysisSnapshots.length > 0 ? analysisSnapshots : snapshots).catch((err) => {
       console.error('[Script] 自动填充脚本失败:', err);
+    });
+    
+    // 终场分析完成后生成主播画像（异步）
+    generateAnchorProfile(sessionId, anchorName).catch((err) => {
+      console.error('[AnchorProfile] 生成主播画像失败:', err);
     });
   }
 }
@@ -1904,7 +2158,7 @@ export async function runAnalysisForReplay(
   const dimensions = extractDimensions(markdownText);
   
   const scores = jsonData?.scores || {};
-  const alerts = extractAlerts(markdownText, jsonData);
+  const alerts = extractAlerts(markdownText, jsonData, scores, snapshots);
   const actionItems = extractActionItems(markdownText, jsonData);
   const highlights = extractHighlights(markdownText, jsonData);
 
