@@ -22,6 +22,8 @@ interface Report {
   id: number; session_id: number; report_type: string; segment_seq: number | null;
   analysis_text: string | null; skill_version: string | null; created_at: string;
   anchor_name: string | null; template_name: string | null; room_type: string | null;
+  overall_score?: number; anchor_score?: number; interaction_score?: number;
+  conversion_score?: number; sentiment_score?: number; rhythm_score?: number;
 }
 
 const DIMENSIONS = [
@@ -250,8 +252,47 @@ export default function ReportsPage() {
                               {new Date(report.created_at).toLocaleString('zh-CN')}
                             </span>
                           </div>
-                          <span className="text-xs text-muted-foreground">Skill v{report.skill_version || '?'}</span>
+                          <div className="flex items-center gap-2">
+                            {/* 综合评分 */}
+                            {report.overall_score && (
+                              <Badge variant="outline" className="text-xs font-bold">
+                                <Star className="h-3 w-3 mr-1 text-primary" />
+                                {report.overall_score.toFixed(1)}
+                              </Badge>
+                            )}
+                            <span className="text-xs text-muted-foreground">v{report.skill_version || '?'}</span>
+                          </div>
                         </div>
+                        {/* 五维评分条 */}
+                        {report.overall_score && (
+                          <div className="flex gap-1 mb-2">
+                            {[
+                              { key: 'anchor_score', label: '话术', color: 'var(--chart-1)' },
+                              { key: 'interaction_score', label: '互动', color: 'var(--chart-2)' },
+                              { key: 'conversion_score', label: '转化', color: 'var(--chart-3)' },
+                              { key: 'sentiment_score', label: '舆情', color: 'var(--chart-4)' },
+                              { key: 'rhythm_score', label: '节奏', color: 'var(--chart-5)' },
+                            ].map(dim => {
+                              const score = report[dim.key as keyof Report] as number;
+                              return score ? (
+                                <div key={dim.key} className="flex-1">
+                                  <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                                    <div
+                                      className="h-full rounded-full"
+                                      style={{
+                                        width: `${(score / 10) * 100}%`,
+                                        background: dim.color
+                                      }}
+                                    />
+                                  </div>
+                                  <div className="text-[10px] text-muted-foreground mt-0.5 text-center">
+                                    {score.toFixed(1)}
+                                  </div>
+                                </div>
+                              ) : null;
+                            })}
+                          </div>
+                        )}
                         <p className="text-sm text-muted-foreground line-clamp-2">
                           {report.analysis_text ? report.analysis_text.slice(0, 120) + '...' : '无内容'}
                         </p>
