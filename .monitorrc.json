@@ -1,0 +1,21 @@
+{
+  "healthCheckInterval": 60000,
+  "resourceCheckInterval": 300000,
+  "testRunInterval": 3600000,
+  "reportInterval": 86400000,
+  "serverPort": 3001,
+  "apiBaseUrl": "http://localhost:3000",
+  "thresholds": {
+    "cpu": 80,
+    "memory": 85,
+    "disk": 90
+  },
+  "severityLevels": {
+    "info": 0,
+    "warning": 1,
+    "error": 2,
+    "critical": 3
+  },
+  "issueRetentionDays": 30,
+  "maxConcurrentTests": 5
+}

@@ -1,0 +1,2481 @@
+// AI分析引擎 - 五维分析 + Skill自优化
+
+import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { REPORT_TYPE } from './config';
+import { UniversalLLMClient } from './llm-client';
+import { getSessionSnapshots } from './fetcher';
+import { memoryManager } from './memory-manager';
+
+// ==================== 类型定义 ====================
+
+interface AnalysisInput {
+  sessionId: number;
+  roomId: string;
+  segmentSeq: number;
+  reportType: 'segment' | 'final';
+}
+
+interface FiveDimensionResult {
+  anchor_analysis: string;       // 主播话术
+  interaction_analysis: string;  // 互动热度
+  conversion_analysis: string;   // 商品转化
+  sentiment_analysis: string;    // 评论舆情
+  rhythm_analysis: string;       // 直播节奏
+}
+
+// ==================== Skill 管理 ====================
+
+const ANALYSIS_FRAMEWORK = `# 直播数据分析框架
+
+你是一位专业的直播数据分析专家。请根据提供的直播数据，从五个维度进行深度分析。
+
+### 1. 主播话术分析
+- 识别开场/过渡/卖点/逼单/收尾的话术结构
+- 分析高频词与口头禅
+- 评估语速与情绪波动
+- 评估痛点描述与挖掘深度
+- 评估产品使用场景还原度
+- 对主播共情力与感染力进行评分(1-10)
+- **关联话术与数据涨跌：标注哪些话术后流量/成交/互动明显上升或下降**
+
+### 2. 互动热度分析
+- 评论量/在线人数时间曲线
+- 互动率（评论数/在线人数）
+- 高峰低谷拐点识别
+- **定位互动爆发的具体时间点（精确到分秒），关联对应时段的话术**
+- 标注互动高峰时段与低谷时段
+
+### 3. 商品转化分析
+- 各商品点击→下单→支付全链路漏斗转化率
+- 客单价分布
+- 爆款与滞销识别
+- **无点击/下单未支付环节数据分析，明确漏斗流失环节**
+- **若点击低则优化商品弹窗的视觉设计建议**
+- **若下单未支付高则增加逼单话术提示"未支付的订单10分钟后自动关闭，库存有限"**
+- 观看→点击→下单→支付漏斗
+- 新粉/老粉转化率对比
+- **新老粉观看≥30min占比数据**
+- 与话术的时间关联
+
+### 4. 评论舆情分析
+- **真实用户评论样本情绪正负面分析（基于实际评论内容）**
+- **高频关键词云（去除水词，如"有了""不会"等单字）**
+- **价格/质量/物流/使用方法类问题归类**
+- **负面预警：识别投诉、退款、差评信号**
+- **观众核心诉求提取与归类（如：问用法→需教程，问物流→需保障）**
+- 标注评论爆发时间点
+
+### 5. 直播节奏分析
+- **时间维度的流量波动数据，标注流量高峰低谷时段**
+- **话术-数据涨跌交叉分析：哪个话术后流量涨/跌，哪个商品讲解后成交上升**
+- 各环节时间占比
+- 主播成交节奏分析
+- 改进建议
+
+## 输出格式
+请严格按照以下格式输出，包含两部分：
+首先是 Markdown 格式的具体分析文本，然后在末尾输出 JSON 格式的结构化数据（必须包含在 \`\`\`json 代码块中）。
+
+### 1. Markdown 格式要求
+每个维度独立段落，使用 Markdown 格式。包含具体数据引用和分析。
+- 综合表现总览
+- ### 主播话术
+- ### 互动热度
+- ### 商品转化
+- ### 评论舆情
+- ### 直播节奏
+
+### 2. JSON 格式要求
+必须在最后严格输出以下 JSON 结构：
+\`\`\`json
+{
+  "summary": "一句话总结本场/本片段表现",
+  "scores": {
+    "overall": 8.5,
+    "anchor": 8.0,
+    "interaction": 8.5,
+    "conversion": 9.0,
+    "sentiment": 8.0,
+    "rhythm": 8.5
+  },
+  "alerts": [
+    {
+      "type": "warning",
+      "severity": "high",
+      "title": "预警标题",
+      "description": "详细描述"
+    }
+  ],
+  "action_items": [
+    {
+      "dimension": "conversion",
+      "priority": "high",
+      "title": "行动建议标题",
+      "description": "具体怎么做"
+    }
+  ],
+  "highlights": [
+    {
+      "dimension": "interaction",
+      "title": "亮点总结"
+    }
+  ]
+}
+\`\`\``;
+
+// ==================== 主播名称提取 ====================
+
+/**
+ * 从直播间名称中提取主播名称
+ * 规则：提取"XX老师"等模式，否则取房间名关键部分
+ */
+export function extractAnchorName(roomName: string): string {
+  if (!roomName) return '未知主播';
+
+  // 优先匹配"XX老师"
+  const teacherMatch = roomName.match(/([\u4e00-\u9fa5]{1,4}老师)/);
+  if (teacherMatch) return teacherMatch[1];
+
+  // 匹配"XX主播"
+  const anchorMatch = roomName.match(/([\u4e00-\u9fa5]{1,4}主播)/);
+  if (anchorMatch) return anchorMatch[1];
+
+  // 匹配"XX的直播间"/"XX直播间"
+  const roomMatch = roomName.match(/([\u4e00-\u9fa5]{1,6})的?直播间/);
+  if (roomMatch) return roomMatch[1];
+
+  // 默认取房间名前6字
+  return roomName.slice(0, 6);
+}
+
+/**
+ * 已知主播映射（手动补充，用于精确匹配）
+ */
+const KNOWN_ANCHORS: Record<string, string> = {
+  '雅文': '雅文老师',
+};
+
+function resolveAnchorName(roomName: string): string {
+  // 先检查已知主播映射
+  for (const [keyword, anchorName] of Object.entries(KNOWN_ANCHORS)) {
+    if (roomName.includes(keyword)) return anchorName;
+  }
+  return extractAnchorName(roomName);
+}
+
+// ==================== 前一场对比 ====================
+
+/**
+ * 获取同一主播的上一场直播关键指标，用于对比分析
+ */
+async function getPreviousSessionComparison(
+  currentSessionId: number,
+  anchorName: string
+): Promise<string> {
+  const client = getSupabaseClient();
+
+  // 查找同一主播的上一场已结束直播
+  const { data: prevSessions, error } = await client
+    .from('live_sessions')
+    .select('id, room_name, start_time, end_time, anchor_name')
+    .eq('anchor_name', anchorName)
+    .eq('status', 'ended')
+    .neq('id', currentSessionId)
+    .order('end_time', { ascending: false })
+    .limit(1);
+
+  if (error || !prevSessions || prevSessions.length === 0) return '';
+
+  const prevSession = prevSessions[0];
+
+  // 获取上一场的终场分析报告
+  const { data: prevReports } = await client
+    .from('analysis_reports')
+    .select('analysis_text, report_type')
+    .eq('session_id', prevSession.id)
+    .eq('report_type', 'final')
+    .order('id', { ascending: false })
+    .limit(1);
+
+  // 获取上一场的快照数据核心指标
+  const { data: prevSnapshots } = await client
+    .from('snapshot_data')
+    .select('raw_json, snapshot_time')
+    .eq('session_id', prevSession.id)
+    .order('snapshot_seq', { ascending: false })
+    .limit(1);
+
+  // 提取上一场核心指标
+  let prevMetrics = '';
+  if (prevSnapshots && prevSnapshots.length > 0) {
+    const rawJson = (prevSnapshots[0] as Record<string, unknown>).raw_json as Record<string, unknown> | null;
+    if (rawJson) {
+      const analysis = (rawJson.analysis as Record<string, unknown>) || {};
+      const orderSummary = (rawJson.orderSummary as Record<string, unknown>) || {};
+      prevMetrics = `
+上一场核心指标:
+- 峰值在线: ${analysis.peakConcurrentViewers || 'N/A'}
+- 累计观看(场观): ${analysis.watcherCnt || 'N/A'}
+- 评论数: ${analysis.commentCnt || 'N/A'}
+- 成交总额: ¥${analysis.transactionAmount || orderSummary.totalAmount || 'N/A'}
+- 成交单数: ${analysis.transactionCnt || orderSummary.paySuccessTotal || 'N/A'}
+- 支付人数: ${analysis.payUserCnt || orderSummary.payUserTotal || 'N/A'}
+	- 人均产值(成交/场观): ${Number(analysis.watcherCnt||0)>0 && Number(analysis.transactionAmount||orderSummary.totalAmount||0)>0 ? '¥'+(Number(analysis.transactionAmount||orderSummary.totalAmount||0)/Number(analysis.watcherCnt||0)).toFixed(2) : 'N/A'}`;
+	    }
+	  }
+
+	  // 上一场分析摘要（取前1500字）
+  let prevAnalysisSummary = '';
+  if (prevReports && prevReports.length > 0 && prevReports[0].analysis_text) {
+    const text = prevReports[0].analysis_text as string;
+    prevAnalysisSummary = `\n\n上一场分析报告摘要:\n${text.slice(0, 1500)}${text.length > 1500 ? '...(已截断)' : ''}`;
+  }
+
+  return `【与前一场对比数据】
+上一场直播: ${prevSession.room_name}
+时间: ${prevSession.start_time ? new Date(String(prevSession.start_time)).toLocaleString('zh-CN') : 'N/A'} ~ ${prevSession.end_time ? new Date(String(prevSession.end_time)).toLocaleString('zh-CN') : 'N/A'}
+${prevMetrics}${prevAnalysisSummary}
+
+**请务必在分析中与前一场数据进行对比**，指出：
+1. 各项指标的变化趋势（提升/下降/持平），必须包含人均产值(成交/场观)对比
+2. 话术改进效果（对比上次的分析建议）
+3. 互动和转化是否进步
+4. 场观和人均产值的综合变化分析
+5. 用【前场对比】标签标注所有对比内容`;
+}
+
+/**
+ * 获取核心基准主播（雅文老师）的数据，用于跨主播对比
+ */
+async function getBenchmarkAnchorData(anchorName: string): Promise<string> {
+  // 只有非雅文老师的主播才需要对比
+  if (anchorName === '雅文老师') return '';
+
+  const client = getSupabaseClient();
+
+  // 获取雅文老师最近3场的关键指标
+  const { data: benchmarkSessions } = await client
+    .from('live_sessions')
+    .select('id, room_name, start_time, end_time')
+    .eq('anchor_name', '雅文老师')
+    .eq('status', 'ended')
+    .order('end_time', { ascending: false })
+    .limit(3);
+
+  if (!benchmarkSessions || benchmarkSessions.length === 0) return '';
+
+  const metricsList: string[] = [];
+  for (const session of benchmarkSessions) {
+    const { data: snaps } = await client
+      .from('snapshot_data')
+      .select('raw_json')
+      .eq('session_id', session.id)
+      .order('snapshot_seq', { ascending: false })
+      .limit(1);
+
+    if (snaps && snaps.length > 0) {
+      const rawJson = (snaps[0] as Record<string, unknown>).raw_json as Record<string, unknown> | null;
+      if (rawJson) {
+        const a = (rawJson.analysis as Record<string, unknown>) || {};
+        const o = (rawJson.orderSummary as Record<string, unknown>) || {};
+        const bAmount = Number(a.transactionAmount || o.totalAmount || 0);
+        const bWatchers = Number(a.watcherCnt || 0);
+        const bPerViewer = bWatchers > 0 && bAmount > 0 ? `¥${(bAmount/bWatchers).toFixed(2)}` : '-';
+        metricsList.push(`  ${session.room_name}(${new Date(String(session.start_time)).toLocaleDateString('zh-CN')}): 峰值在线${a.peakConcurrentViewers||'-'} / 场观${a.watcherCnt||'-'} / 成交¥${bAmount||'-'} / ${a.transactionCnt||o.paySuccessTotal||'-'}单 / 人均产值${bPerViewer}`);
+      }
+    }
+  }
+
+  if (metricsList.length === 0) return '';
+
+  return `【核心基准主播对比（雅文老师）】
+以下是核心基准主播"雅文老师"的近期表现，请作为对比参考：
+${metricsList.join('\n')}
+
+**请在分析中与雅文老师的数据进行对比**，用【基准对比】标签标注，指出：
+1. 与核心基准主播的差距，特别是人均产值差距
+2. 场观效率对比：谁的人均产值更高，原因是什么
+3. 可从雅文老师学习的话术和节奏策略
+4. 针对性的追赶建议`;
+}
+
+/**
+ * 获取当前活跃的 Skill（框架 + 知识）
+ */
+async function getActiveSkill(): Promise<{ content: string; version: string }> {
+  const client = getSupabaseClient();
+
+  // 获取最新Skill版本
+  const { data: skillData, error } = await client
+    .from('skill_versions')
+    .select('content, version')
+    .eq('is_active', 1)
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !skillData) {
+    // 首次运行：用框架 + 现有知识生成完整Skill
+    const knowledgeContext = await buildKnowledgeContext();
+    const fullSkill = knowledgeContext
+      ? `${ANALYSIS_FRAMEWORK}\n\n${knowledgeContext}`
+      : ANALYSIS_FRAMEWORK;
+    return { content: fullSkill, version: 'v1' };
+  }
+
+  return { content: skillData.content, version: skillData.version };
+}
+
+/**
+ * 从数据库构建知识上下文（模型无关的结构化知识）
+ */
+async function buildKnowledgeContext(): Promise<string> {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('analysis_knowledge')
+    .select('category, dimension, key, value, confidence, sample_count')
+    .gte('confidence', 2)  // 只使用被验证2次以上的知识
+    .order('confidence', { ascending: false });
+
+  if (error || !data || data.length === 0) return '';
+
+  // 按类别分组构建上下文
+  const grouped = new Map<string, Map<string, { key: string; value: string; confidence: number; sample_count: number }[]>>();
+
+  for (const row of data) {
+    if (!grouped.has(row.category)) grouped.set(row.category, new Map());
+    const catMap = grouped.get(row.category)!;
+    if (!catMap.has(row.dimension)) catMap.set(row.dimension, []);
+    catMap.get(row.dimension)!.push({
+      key: row.key,
+      value: row.value,
+      confidence: row.confidence,
+      sample_count: row.sample_count,
+    });
+  }
+
+  const lines: string[] = ['# 历史分析知识库（自动积累）'];
+  lines.push('> 以下知识来自历史分析经验的自动提取和验证，供参考使用。');
+
+  // 阈值类知识
+  const thresholdMap = grouped.get('threshold');
+  if (thresholdMap) {
+    lines.push('\n## 评估阈值标准');
+    for (const [dim, items] of thresholdMap) {
+      lines.push(`\n### ${getDimensionLabel(dim)}`);
+      for (const item of items) {
+        lines.push(`- ${item.key}: ${item.value} (置信度${item.confidence}/5, ${item.sample_count}次验证)`);
+      }
+    }
+  }
+
+  // 模式类知识
+  const patternMap = grouped.get('pattern');
+  if (patternMap) {
+    lines.push('\n## 已识别的数据模式');
+    for (const [dim, items] of patternMap) {
+      lines.push(`\n### ${getDimensionLabel(dim)}`);
+      for (const item of items) {
+        lines.push(`- ${item.key}: ${item.value} (置信度${item.confidence}/5)`);
+      }
+    }
+  }
+
+  // 基准类知识
+  const benchmarkMap = grouped.get('benchmark');
+  if (benchmarkMap) {
+    lines.push('\n## 行业基准数据');
+    for (const [dim, items] of benchmarkMap) {
+      lines.push(`\n### ${getDimensionLabel(dim)}`);
+      for (const item of items) {
+        lines.push(`- ${item.key}: ${item.value} (置信度${item.confidence}/5)`);
+      }
+    }
+  }
+
+  // 规则类知识
+  const ruleMap = grouped.get('rule');
+  if (ruleMap) {
+    lines.push('\n## 分析规则与建议');
+    for (const [dim, items] of ruleMap) {
+      lines.push(`\n### ${getDimensionLabel(dim)}`);
+      for (const item of items) {
+        lines.push(`- ${item.key}: ${item.value} (置信度${item.confidence}/5)`);
+      }
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function getDimensionLabel(dim: string): string {
+  const labels: Record<string, string> = {
+    anchor: '主播话术',
+    interaction: '互动热度',
+    conversion: '商品转化',
+    sentiment: '评论舆情',
+    rhythm: '直播节奏',
+    general: '通用',
+  };
+  return labels[dim] || dim;
+}
+
+// ==================== 数据提取工具 ====================
+
+/**
+ * 格式化毫秒时间戳为 HH:MM:SS
+ */
+function formatTimestamp(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+}
+
+/**
+ * 从chartData中提取指定时间窗口的时序数据
+ */
+function extractChartWindow(
+  chartData: Record<string, unknown>,
+  startTime: Date | null,
+  endTime: Date | null
+): string {
+  const xis = (chartData.xis as string[]) || [];
+  const onlineList = (chartData.onlineUserCntList as number[]) || [];
+  const commenterList = (chartData.commenterCntList as number[]) || [];
+  const clickList = (chartData.productClickCntList as number[]) || [];
+  const payUserList = (chartData.payUserCntList as number[]) || [];
+  const amountList = (chartData.transactionAmountList as number[]) || [];
+  const cntList = (chartData.transactionCntList as number[]) || [];
+  const mallViewList = (chartData.mallPageViewCntList as number[]) || [];
+
+  if (xis.length === 0) return '无时序数据';
+
+  // Determine window indices
+  let startIdx = 0;
+  let endIdx = xis.length;
+
+  if (startTime) {
+    const startStr = `${String(startTime.getHours()).padStart(2, '0')}:${String(startTime.getMinutes()).padStart(2, '0')}`;
+    startIdx = xis.findIndex((t) => t >= startStr);
+    if (startIdx === -1) startIdx = 0;
+  }
+  if (endTime) {
+    const endStr = `${String(endTime.getHours()).padStart(2, '0')}:${String(endTime.getMinutes()).padStart(2, '0')}`;
+    endIdx = xis.findIndex((t) => t >= endStr);
+    if (endIdx === -1) endIdx = xis.length;
+  }
+
+  // Build time-series summary - sample to reduce data size (max 60 points)
+  const windowXis = xis.slice(startIdx, endIdx);
+  const windowOnline = onlineList.slice(startIdx, endIdx);
+  const windowCommenter = commenterList.slice(startIdx, endIdx);
+  const windowClick = clickList.slice(startIdx, endIdx);
+  const windowPayUser = payUserList.slice(startIdx, endIdx);
+  const windowAmount = amountList.slice(startIdx, endIdx);
+  const windowCnt = cntList.slice(startIdx, endIdx);
+  const windowMallView = mallViewList.slice(startIdx, endIdx);
+
+  if (windowXis.length === 0) return '此时段无时序数据';
+
+  // Calculate summary stats
+  const onlineValues = windowOnline.filter(v => v !== undefined && v !== null);
+  const avgOnline = onlineValues.length > 0 ? Math.round(onlineValues.reduce((a, b) => a + b, 0) / onlineValues.length) : 0;
+  const maxOnline = onlineValues.length > 0 ? Math.max(...onlineValues) : 0;
+  const minOnline = onlineValues.length > 0 ? Math.min(...onlineValues) : 0;
+
+  // Find peak/trough minutes
+  const peakOnlineIdx = onlineValues.indexOf(maxOnline);
+  const troughOnlineIdx = onlineValues.indexOf(minOnline);
+
+  // Sample the data points (take every Nth point if too many)
+  const maxPoints = 60;
+  const step = Math.max(1, Math.floor(windowXis.length / maxPoints));
+
+  let timeSeriesLines: string[] = [];
+  timeSeriesLines.push(`时间 | 在线 | 评论人数 | 商品点击 | 支付人数 | 成交额`);
+  for (let i = 0; i < windowXis.length; i += step) {
+    timeSeriesLines.push(
+      `${windowXis[i]} | ${windowOnline[i] ?? '-'} | ${windowCommenter[i] ?? '-'} | ${windowClick[i] ?? '-'} | ${windowPayUser[i] ?? '-'} | ¥${windowAmount[i] ?? '-'}`
+    );
+  }
+
+  return `
+【时段统计】
+- 时间范围: ${windowXis[0]} ~ ${windowXis[windowXis.length - 1]}
+- 平均在线人数: ${avgOnline}
+- 在线峰值: ${maxOnline} (时间: ${windowXis[peakOnlineIdx * step] || '-'})
+- 在线低谷: ${minOnline} (时间: ${windowXis[troughOnlineIdx * step] || '-'})
+
+【分钟级时序数据】
+${timeSeriesLines.join('\n')}
+`;
+}
+
+/**
+ * 构建商品漏斗数据
+ */
+function buildGoodsFunnel(orderRecords: Record<string, unknown>[]): string {
+  const goodsMap = new Map<string, {
+    goodsName: string;
+    goodsPrice: number;
+    clickCount: number;
+    buyCount: number;
+    paidCount: number;
+    unpaidCount: number;
+    totalPaidAmount: number;
+  }>();
+
+  for (const o of orderRecords) {
+    const name = String(o.goodsName || o.productName || '');
+    if (!name) continue;
+    const price = Number(o.goodsPrice || 0);
+    const click = Number(o.clickCount || 0);
+    const buy = Number(o.buyCount || 0);
+    const payStatus = String(o.payStatus || '');
+    const isPaid = payStatus === 'SUCCESS' || payStatus === 'PAID' || payStatus === '已支付';
+    const payPrice = Number(o.payPrice || o.payAmount || 0);
+
+    const existing = goodsMap.get(name);
+    if (existing) {
+      existing.clickCount += click;
+      existing.buyCount += buy;
+      if (isPaid) {
+        existing.paidCount += 1;
+        existing.totalPaidAmount += payPrice || price;
+      } else if (payStatus === 'NOTPAY') {
+        existing.unpaidCount += 1;
+      }
+    } else {
+      goodsMap.set(name, {
+        goodsName: name,
+        goodsPrice: price,
+        clickCount: click,
+        buyCount: buy,
+        paidCount: isPaid ? 1 : 0,
+        unpaidCount: payStatus === 'NOTPAY' ? 1 : 0,
+        totalPaidAmount: isPaid ? (payPrice || price) : 0,
+      });
+    }
+  }
+
+  if (goodsMap.size === 0) return '无商品订单数据';
+
+  const lines: string[] = [];
+  lines.push('商品名称 | 价格 | 点击次数 | 下单次数 | 已支付 | 未支付 | 点击→下单率 | 下单→支付率 | 支付总额');
+  for (const g of goodsMap.values()) {
+    const clickToOrder = g.clickCount > 0 ? `${((g.buyCount / g.clickCount) * 100).toFixed(1)}%` : '-';
+    const orderToPaid = g.buyCount > 0 ? `${((g.paidCount / g.buyCount) * 100).toFixed(1)}%` : (g.paidCount > 0 ? '100%' : '-');
+    lines.push(`${g.goodsName} | ¥${g.goodsPrice} | ${g.clickCount} | ${g.buyCount} | ${g.paidCount} | ${g.unpaidCount} | ${clickToOrder} | ${orderToPaid} | ¥${g.totalPaidAmount.toFixed(2)}`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * 构建评论分析数据（带分秒级时间戳）
+ */
+function buildCommentsData(
+  comments: Record<string, unknown>[],
+  startTime: Date | null,
+  endTime: Date | null
+): string {
+  // Filter by time window if specified
+  let filtered = comments;
+  if (startTime || endTime) {
+    filtered = comments.filter((c) => {
+      const ts = Number(c.timestamp || 0);
+      if (!ts) return true; // keep if no timestamp
+      const d = new Date(ts);
+      if (startTime && d < startTime) return false;
+      if (endTime && d > endTime) return false;
+      return true;
+    });
+  }
+
+  if (filtered.length === 0) return '无评论数据';
+
+  // Count by sentiment keywords
+  const positiveWords = ['好', '棒', '喜欢', '赞', '牛', '厉害', '太好了', '买了', '下单', '已拍', '谢谢', '爱'];
+  const negativeWords = ['差', '烂', '垃圾', '骗', '假', '退', '差评', '失望', '不好', '不满', '坑', '贵'];
+  const questionWords = ['怎么用', '多少钱', '多久', '什么时候', '能', '可以', '有没有', '吗', '？', '?', '如何', '效果'];
+
+  let positiveCnt = 0;
+  let negativeCnt = 0;
+  let questionCnt = 0;
+  const keywordMap = new Map<string, number>();
+
+  for (const c of filtered) {
+    const content = String(c.content || '');
+    const isPositive = positiveWords.some(w => content.includes(w));
+    const isNegative = negativeWords.some(w => content.includes(w));
+    const isQuestion = questionWords.some(w => content.includes(w));
+    if (isPositive) positiveCnt++;
+    if (isNegative) negativeCnt++;
+    if (isQuestion) questionCnt++;
+
+    // Extract meaningful keywords (2+ chars, filter common stop words)
+    const stopWords = new Set(['有了', '不会', '可以', '没有', '这个', '那个', '什么', '怎么', '老师', '还是', '一个', '就是', '已经', '现在', '自己', '知道', '这样', '的话', '是不是', '的话']);
+    const words = content.replace(/[，。！？、；：""''（）【】\s]/g, ' ').split(/\s+/).filter(w => w.length >= 2 && !stopWords.has(w));
+    for (const w of words) {
+      keywordMap.set(w, (keywordMap.get(w) || 0) + 1);
+    }
+  }
+
+  // Sort keywords by frequency
+  const topKeywords = Array.from(keywordMap.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 30)
+    .map(([word, cnt]) => `${word}(${cnt})`)
+    .join(', ');
+
+  // Categorize questions
+  const priceQ = filtered.filter(c => /价|钱|多少|贵|便宜|优惠|折扣/.test(String(c.content))).length;
+  const qualityQ = filtered.filter(c => /质量|效果|好用|管用|有用|有效/.test(String(c.content))).length;
+  const shippingQ = filtered.filter(c => /物流|快递|发货|收货|到货|几天/.test(String(c.content))).length;
+  const usageQ = filtered.filter(c => /怎么用|如何用|用法|使用|教程/.test(String(c.content))).length;
+
+  // Negative warnings
+  const negativeComments = filtered.filter(c => negativeWords.some(w => String(c.content || '').includes(w)));
+
+  // Build comments sample with timestamps
+  const commentSample = filtered.slice(0, 50).map((c) => {
+    const ts = Number(c.timestamp || 0);
+    const timeStr = ts > 0 ? formatTimestamp(ts) : '--:--:--';
+    const userTag = c.isNewUser ? '[新]' : '[老]';
+    return `${timeStr} ${userTag}${c.nickname || '匿名'}: ${c.content}`;
+  }).join('\n');
+
+  return `
+【评论统计】
+- 总评论数: ${filtered.length}
+- 正面情绪: ${positiveCnt}条 (${((positiveCnt / filtered.length) * 100).toFixed(1)}%)
+- 负面情绪: ${negativeCnt}条 (${((negativeCnt / filtered.length) * 100).toFixed(1)}%)
+- 提问类: ${questionCnt}条 (${((questionCnt / filtered.length) * 100).toFixed(1)}%)
+
+【问题归类】
+- 价格相关: ${priceQ}条
+- 效果/质量相关: ${qualityQ}条
+- 物流相关: ${shippingQ}条
+- 使用方法相关: ${usageQ}条
+
+【高频关键词Top30】
+${topKeywords || '无'}
+
+${negativeComments.length > 0 ? `【负面预警】\n${negativeComments.slice(0, 10).map(c => {
+  const ts = Number(c.timestamp || 0);
+  const timeStr = ts > 0 ? formatTimestamp(ts) : '--:--:--';
+  return `⚠ ${timeStr} ${c.nickname || '匿名'}: ${c.content}`;
+}).join('\n')}` : '【负面预警】无明显负面信号'}
+
+【评论样本(前50条，含分秒时间戳)】
+${commentSample}
+`;
+}
+
+/**
+ * 构建新老粉数据
+ */
+function buildNewoldData(newoldData: Record<string, string>): string {
+  return `
+【新老粉数据】
+新学员:
+- 观看人数: ${newoldData.nwatcherCnt || 'N/A'}
+- 支付人数: ${newoldData.ntransactionUserCnt || 'N/A'}
+- 转化率: ${newoldData.nconversionRate || 'N/A'}%
+- 观看≥30min人数: ${newoldData.nwatcher30Cnt || 'N/A'}
+
+老学员:
+- 观看人数: ${newoldData.owatcherCnt || 'N/A'}
+- 支付人数: ${newoldData.otransactionUserCnt || 'N/A'}
+- 转化率: ${newoldData.oconversionRate || 'N/A'}%
+- 观看≥30min人数: ${newoldData.owatcher30Cnt || 'N/A'}
+`;
+}
+
+// ==================== 分析引擎 ====================
+
+/**
+ * 构建五维分析 Prompt
+ */
+/**
+ * 获取与当前直播关联的历史脚本和商品成交基准
+ */
+async function getHistoricalScripts(): Promise<string> {
+  const client = getSupabaseClient();
+  
+  const { data: scripts, error } = await client
+    .from('live_scripts')
+    .select('*')
+    .order('id', { ascending: false })
+    .limit(50);
+
+  if (error || !scripts || scripts.length === 0) return '';
+
+  const scriptText = scripts.map((s: Record<string, unknown>) => {
+    const parts = [`场次: ${s.session_date}`];
+    if (s.anchor_name) parts.push(`主播: ${s.anchor_name}`);
+    if (s.keywords) parts.push(`关键词: ${s.keywords}`);
+    if (s.content_points) parts.push(`内容要点:\n${s.content_points}`);
+    if (s.product_list) parts.push(`产品清单:\n${s.product_list}`);
+    if (s.transaction_data) parts.push(`成交数据:\n${s.transaction_data}`);
+    if (s.replay_transaction) parts.push(`录播成交: ${s.replay_transaction}`);
+    return parts.join('\n');
+  }).join('\n---\n');
+
+  return `【历史直播脚本与成交数据参考】\n以下为过往直播的脚本大纲和成交数据，用于对比分析当前直播表现、识别话术模式、建立成交基准线：\n\n${scriptText}`;
+}
+
+/**
+ * 获取商品成交基准知识
+ */
+async function getProductBenchmarks(): Promise<string> {
+  const client = getSupabaseClient();
+  
+  const { data: benchmarks, error } = await client
+    .from('analysis_knowledge')
+    .select('*')
+    .in('category', ['benchmark', 'threshold', 'pattern'])
+    .in('dimension', ['conversion', 'general'])
+    .gte('confidence', 2)
+    .order('sample_count', { ascending: false })
+    .limit(30);
+
+  if (error || !benchmarks || benchmarks.length === 0) return '';
+
+  const grouped: Record<string, string[]> = {};
+  for (const b of benchmarks) {
+    const dim = b.dimension as string;
+    if (!grouped[dim]) grouped[dim] = [];
+    grouped[dim].push(`- ${b.key}: ${b.value} (置信度${b.confidence}, ${b.sample_count}次验证)`);
+  }
+
+  const text = Object.entries(grouped)
+    .map(([dim, items]) => `### ${dim === 'conversion' ? '商品转化' : '通用'}基准\n${items.join('\n')}`)
+    .join('\n\n');
+
+  return `【商品成交基准数据】\n${text}`;
+}
+
+function buildAnalysisPrompt(
+  skillContent: string,
+  snapshotData: Record<string, unknown>[],
+  reportType: 'segment' | 'final',
+  segmentSeq: number,
+  historicalContext: string = '',
+  previousSessionComparison: string = '',
+  benchmarkAnchorData: string = ''
+): string {
+  const typeLabel = reportType === REPORT_TYPE.FINAL ? '终场综合' : `第${segmentSeq}片段(近30分钟)`;
+
+  // For segment analysis: determine the time window
+  const lastSnap = snapshotData[snapshotData.length - 1];
+  const snapshotTime = lastSnap?.snapshot_time ? new Date(String(lastSnap.snapshot_time)) : null;
+
+  // For segment: window is last 30 min before snapshot_time
+  // For final: window is entire session
+  let windowStart: Date | null = null;
+  let windowEnd: Date | null = null;
+
+  if (reportType !== REPORT_TYPE.FINAL && snapshotTime) {
+    windowEnd = snapshotTime;
+    windowStart = new Date(snapshotTime.getTime() - 30 * 60 * 1000);
+  }
+
+  // Build comprehensive data for each snapshot
+  const dataSummary = snapshotData.map((snap, idx) => {
+    const rawJson = snap.raw_json as Record<string, unknown> | null;
+    if (!rawJson) return '';
+
+    const analysis = (rawJson.analysis as Record<string, unknown>) || {};
+    const newoldData = (rawJson.newoldData as Record<string, string>) || {};
+    const chartData = (rawJson.chartData as Record<string, unknown>) || {};
+    const comments = (rawJson.comments as Record<string, unknown>[]) || [];
+    const orderDetails = (rawJson.orderDetails as Record<string, unknown>[]) || [];
+    const orderSummary = (rawJson.orderSummary as Record<string, unknown>) || {};
+    const memberData = (rawJson.memberData as Record<string, unknown>[]) || {};
+    const transcription = snap.transcription as string | null;
+
+    // Core metrics from analysis
+    const onlineCount = analysis.peakConcurrentViewers || 'N/A';
+    const avgOnline = chartData.onlineUserCntList
+      ? Math.round((chartData.onlineUserCntList as number[]).reduce((a: number, b: number) => a + b, 0) / (chartData.onlineUserCntList as number[]).length)
+      : 'N/A';
+    const watcherCnt = analysis.watcherCnt || 'N/A';
+    const viewCnt = analysis.viewCnt || 'N/A';
+    const commentCnt = analysis.commentCnt || 'N/A';
+    const commenterCnt = analysis.commenterCnt || 'N/A';
+    const interactionRate = analysis.interactionRate || 'N/A';
+    const productClickCnt = analysis.productClickCnt || 'N/A';
+    const mallPageViewCnt = analysis.mallPageViewCnt || 'N/A';
+    const transactionAmount = analysis.transactionAmount || orderSummary.totalAmount || 'N/A';
+    const transactionCnt = analysis.transactionCnt || orderSummary.paySuccessTotal || 'N/A';
+    const payUserCnt = analysis.payUserCnt || orderSummary.payUserTotal || 'N/A';
+    const avgWatchTime = analysis.avgWatchTime || 'N/A';
+
+    // Segment-specific: use avg online for this window, not peak
+    const displayOnline = reportType === REPORT_TYPE.FINAL ? onlineCount : avgOnline;
+
+    return `
+--- 片段 ${idx + 1} (快照时间: ${snap.snapshot_time}) ---
+
+【核心指标】
+当前/峰值在线人数: ${displayOnline}${reportType !== REPORT_TYPE.FINAL ? ` (平均${avgOnline})` : ''}
+累计观看人数: ${watcherCnt}
+累计观看人次: ${viewCnt}
+评论数: ${commentCnt}
+评论人数: ${commenterCnt}
+互动率: ${interactionRate}%
+商品点击次数: ${productClickCnt}
+商城浏览次数: ${mallPageViewCnt}
+成交总额: ¥${transactionAmount}
+成交单数: ${transactionCnt}
+支付人数: ${payUserCnt}
+人均产值(成交/场观): ${Number(watcherCnt) > 0 && Number(transactionAmount) > 0 ? '¥' + (Number(transactionAmount) / Number(watcherCnt)).toFixed(2) : 'N/A'}
+平均观看时长: ${avgWatchTime}秒
+
+${transcription ? `【主播语音转写】\n${transcription}\n` : '【主播语音转写】暂无转写数据'}
+
+${buildNewoldData(newoldData)}
+
+【时间曲线数据】
+${extractChartWindow(chartData, windowStart, windowEnd)}
+
+【商品漏斗数据(点击→下单→支付)】
+${buildGoodsFunnel(orderDetails)}
+
+【评论舆情数据】
+${buildCommentsData(comments, windowStart, windowEnd)}
+`;
+  }).join('\n');
+
+  // For final analysis, collect all transcriptions into a complete script
+  let fullScript = '';
+  if (reportType === REPORT_TYPE.FINAL) {
+    const transcriptions = snapshotData
+      .map((snap, idx) => {
+        const t = snap.transcription as string | null;
+        return t ? `[片段${idx + 1}] ${t}` : '';
+      })
+      .filter(Boolean)
+      .join('\n\n');
+    if (transcriptions) {
+      fullScript = `\n【整场直播完整脚本】\n${transcriptions}\n`;
+    }
+  }
+
+  return `${skillContent}
+
+---
+
+## 当前分析任务
+
+请对以下直播数据进行**${typeLabel}分析**。
+
+${historicalContext ? `${historicalContext}\n\n---\n\n` : ''}${dataSummary}
+${fullScript}
+${previousSessionComparison ? `\n---\n\n${previousSessionComparison}\n` : ''}${benchmarkAnchorData ? `\n---\n\n${benchmarkAnchorData}\n` : ''}
+---
+
+请严格按照上述五维分析框架输出分析结果。每个维度需包含：
+1. 核心发现（基于具体数据，引用数据源，**与历史脚本/成交基准对比**）
+2. 评分（1-10分）
+3. 具体改进建议（可执行、有针对性）
+
+特别注意：
+- 评论时间精确到分秒，定位互动爆发的具体时间点
+- 关联话术与数据涨跌（哪个话术后流量/成交/互动明显变化）
+- 商品漏斗要分析每个环节的流失率并给出针对性建议
+- 评论舆情要用真实评论样本分析，不要泛泛而谈
+- 流量高峰低谷要标注具体时间段
+- **对比历史脚本和成交基准，识别当前直播与过往的差异和改进点**
+- **基于历史成交数据，评估当前商品组合和话术的转化效果**
+${previousSessionComparison ? `- **必须与前一场直播对比，标注【前场对比】**，指出进步和退步的地方` : ''}${benchmarkAnchorData ? `- **必须与核心基准主播（雅文老师）对比，标注【基准对比】**，指出差距和追赶建议` : ''}
+
+输出格式要求：
+- 请严格遵守前面定义的 Markdown + JSON 混合输出格式。
+- 文本分析必须在前面，JSON 结构必须在最后，并用 \`\`\`json 包裹。
+- 文本部分中，每个维度使用 ### 标题
+- 包含具体数据引用
+- 与历史数据对比时标注【历史对比】
+${previousSessionComparison ? '- 与前一场对比时标注【前场对比】' : ''}${benchmarkAnchorData ? '- 与核心基准对比时标注【基准对比】' : ''}
+`;
+}
+
+/**
+ * 使用 LLM 执行五维分析
+ */
+async function callLLMAnalysis(prompt: string): Promise<string> {
+  const client = new UniversalLLMClient();
+  await client.initFromDb();
+
+  const messages = [
+    {
+      role: 'system' as const,
+      content: '你是一位专业的直播数据分析专家，擅长从多维度分析直播数据并给出可操作的改进建议。',
+    },
+    {
+      role: 'user' as const,
+      content: prompt,
+    },
+  ];
+
+  const response = await client.invoke(messages as any, {
+    temperature: 0.4,
+  });
+
+  return response;
+}
+
+/**
+ * 从分析文本中提取五维内容
+ */
+function extractDimensions(analysisText: string): FiveDimensionResult {
+  const sections = analysisText.split(/###\s*/);
+  const result: FiveDimensionResult = {
+    anchor_analysis: '',
+    interaction_analysis: '',
+    conversion_analysis: '',
+    sentiment_analysis: '',
+    rhythm_analysis: '',
+  };
+
+  const dimensionKeywords: Record<keyof FiveDimensionResult, string[]> = {
+    anchor_analysis: ['主播话术', '话术分析', '主播'],
+    interaction_analysis: ['互动热度', '互动分析', '互动'],
+    conversion_analysis: ['商品转化', '转化分析', '转化'],
+    sentiment_analysis: ['评论舆情', '舆情分析', '舆情'],
+    rhythm_analysis: ['直播节奏', '节奏分析', '节奏'],
+  };
+
+  for (const section of sections) {
+    if (!section.trim()) continue;
+
+    for (const [key, keywords] of Object.entries(dimensionKeywords)) {
+      if (keywords.some((kw) => section.includes(kw))) {
+        result[key as keyof FiveDimensionResult] = section.trim();
+        break;
+      }
+    }
+  }
+
+  // 如果某个维度为空，使用完整文本
+  for (const key of Object.keys(result) as (keyof FiveDimensionResult)[]) {
+    if (!result[key]) {
+      result[key] = analysisText;
+      break;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * 从分析文本中解析出 JSON 和 Markdown 结果
+ */
+export function extractJsonAndMarkdown(analysisText: string) {
+  let jsonStr = '';
+  let markdown = analysisText;
+  
+  const jsonMatch = analysisText.match(/```json\s*([\s\S]*?)\s*```/);
+  if (jsonMatch) {
+    jsonStr = jsonMatch[1];
+    markdown = analysisText.replace(jsonMatch[0], '').trim();
+  } else {
+    const firstBrace = analysisText.indexOf('{');
+    const lastBrace = analysisText.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      jsonStr = analysisText.substring(firstBrace, lastBrace + 1);
+      markdown = analysisText.substring(0, firstBrace).trim() + '\n' + analysisText.substring(lastBrace + 1).trim();
+    }
+  }
+
+  let jsonData: any = {};
+  try {
+    if (jsonStr) jsonData = JSON.parse(jsonStr);
+  } catch (e) {
+    console.warn('[Analyzer] JSON 解析失败:', e);
+  }
+
+  return { json: jsonData, markdown };
+}
+
+/** 从分析文本中提取预警项 */
+function extractAlerts(analysisText: string, jsonData?: any): Array<{
+  type: string;
+  severity: string;
+  title: string;
+  description: string;
+}> {
+  if (jsonData && Array.isArray(jsonData.alerts)) {
+    return jsonData.alerts;
+  }
+  return [];
+}
+
+/** 从分析文本中提取可执行建议 */
+function extractActionItems(analysisText: string, jsonData?: any): Array<{
+  dimension: string;
+  title: string;
+  description: string;
+  priority: string;
+}> {
+  if (jsonData && Array.isArray(jsonData.action_items)) {
+    return jsonData.action_items;
+  }
+  return [];
+}
+
+/** 从分析文本中提取亮点 */
+function extractHighlights(analysisText: string, jsonData?: any): Array<{
+  dimension: string;
+  title: string;
+  metric?: string;
+}> {
+  if (jsonData && Array.isArray(jsonData.highlights)) {
+    return jsonData.highlights;
+  }
+  return [];
+}
+
+/** 保存预警到live_alerts表 */
+async function saveAlerts(sessionId: number, alerts: Array<{ type: string; severity: string; title: string; description: string }>) {
+  if (alerts.length === 0) return;
+  const client = getSupabaseClient();
+  for (const alert of alerts) {
+    await client.from('live_alerts').insert({
+      session_id: sessionId,
+      alert_type: alert.type,
+      severity: alert.severity,
+      title: alert.title,
+      description: alert.description,
+    });
+  }
+  console.info(`[Alerts] 保存 ${alerts.length} 条预警 (session=${sessionId})`);
+}
+
+/** 保存行动项到action_items表 */
+async function saveActionItems(
+  sessionId: number,
+  reportId: number | undefined,
+  anchorName: string | null,
+  items: Array<{ dimension: string; title: string; description: string; priority: string }>,
+  sourceQuote: string
+) {
+  if (items.length === 0) return;
+  const client = getSupabaseClient();
+  const rows = items.map((item) => ({
+    session_id: sessionId,
+    report_id: reportId,
+    anchor_name: anchorName,
+    dimension: item.dimension,
+    title: item.title,
+    description: item.description,
+    priority: item.priority,
+    source_quote: sourceQuote.substring(0, 1000),
+  }));
+  const { error } = await client.from('action_items').insert(rows);
+  if (error) {
+    console.error('[ActionItems] 保存失败:', error.message);
+  } else {
+    console.info(`[ActionItems] 保存 ${items.length} 条建议 (session=${sessionId})`);
+  }
+}
+
+// ==================== Skill 自优化（知识积累系统） ====================
+
+/**
+ * 知识条目
+ */
+interface KnowledgeItem {
+  category: 'threshold' | 'pattern' | 'benchmark' | 'rule';
+  dimension: string;
+  key: string;
+  value: string;
+  source: string;
+}
+
+/**
+ * 从分析结果和数据中提取结构化知识
+ * 不依赖LLM，直接从数据中计算和归纳
+ */
+function extractKnowledgeFromAnalysis(
+  snapshotData: Record<string, unknown>[],
+  analysisText: string,
+  sessionId: number
+): KnowledgeItem[] {
+  const items: KnowledgeItem[] = [];
+  const source = `session_${sessionId}`;
+
+  for (const snap of snapshotData) {
+    const rawJson = snap.raw_json as Record<string, unknown> | null;
+    if (!rawJson) continue;
+
+    const analysis = (rawJson.analysis as Record<string, unknown>) || {};
+    const newoldData = (rawJson.newoldData as Record<string, string>) || {};
+    const chartData = (rawJson.chartData as Record<string, unknown>) || {};
+    const comments = (rawJson.comments as Record<string, unknown>[]) || [];
+    const orderDetails = (rawJson.orderDetails as Record<string, unknown>[]) || [];
+
+    // ---- 阈值类知识 (threshold) ----
+    // 互动率标准
+    const commentCnt = Number(analysis.commentCnt || 0);
+    const peakViewers = Number(analysis.peakConcurrentViewers || 0);
+    const interactionRate = peakViewers > 0 ? (commentCnt / peakViewers * 100) : 0;
+    if (interactionRate > 0) {
+      items.push({
+        category: 'threshold',
+        dimension: 'interaction',
+        key: '互动率(评论数/峰值在线)',
+        value: `${interactionRate.toFixed(1)}%`,
+        source,
+      });
+    }
+
+    // 商品转化率标准
+    const productClickCnt = Number(analysis.productClickCnt || 0);
+    const payUserCnt = Number(analysis.payUserCnt || 0);
+    const transactionCnt = Number(analysis.transactionCnt || 0);
+    if (productClickCnt > 0 && transactionCnt > 0) {
+      const clickToOrderRate = (transactionCnt / productClickCnt * 100).toFixed(1);
+      items.push({
+        category: 'threshold',
+        dimension: 'conversion',
+        key: '点击→下单转化率',
+        value: `${clickToOrderRate}%`,
+        source,
+      });
+    }
+    if (transactionCnt > 0 && payUserCnt > 0) {
+      const orderToPayRate = (payUserCnt / transactionCnt * 100).toFixed(1);
+      items.push({
+        category: 'threshold',
+        dimension: 'conversion',
+        key: '下单→支付转化率',
+        value: `${orderToPayRate}%`,
+        source,
+      });
+    }
+
+    // 评论率(评论人数/观看人数)
+    const commenterCnt = Number(analysis.commenterCnt || 0);
+    const watcherCnt = Number(analysis.watcherCnt || 0);
+    if (watcherCnt > 0 && commenterCnt > 0) {
+      const commenterRate = (commenterCnt / watcherCnt * 100).toFixed(1);
+      items.push({
+        category: 'threshold',
+        dimension: 'interaction',
+        key: '评论人数占比(评论人数/观看人数)',
+        value: `${commenterRate}%`,
+        source,
+      });
+    }
+
+    // ---- 基准类知识 (benchmark) ----
+    // 峰值在线
+    if (peakViewers > 0) {
+      items.push({
+        category: 'benchmark',
+        dimension: 'interaction',
+        key: '峰值在线人数',
+        value: String(peakViewers),
+        source,
+      });
+    }
+
+    // 平均观看时长
+    const avgWatchTime = Number(analysis.avgWatchTime || 0);
+    if (avgWatchTime > 0) {
+      const minutes = Math.round(avgWatchTime / 60);
+      items.push({
+        category: 'benchmark',
+        dimension: 'rhythm',
+        key: '平均观看时长',
+        value: `${minutes}分钟`,
+        source,
+      });
+    }
+
+    // 成交金额
+    const transactionAmount = Number(analysis.transactionAmount || 0);
+    if (transactionAmount > 0) {
+      items.push({
+        category: 'benchmark',
+        dimension: 'conversion',
+        key: '成交金额',
+        value: `¥${transactionAmount}`,
+        source,
+      });
+    }
+
+    // 客单价
+    if (transactionAmount > 0 && payUserCnt > 0) {
+      const avgPrice = (transactionAmount / payUserCnt).toFixed(0);
+      items.push({
+        category: 'benchmark',
+        dimension: 'conversion',
+        key: '客单价',
+        value: `¥${avgPrice}`,
+        source,
+      });
+    }
+
+    // ---- 新老粉数据 ----
+    if (newoldData.nconversionRate) {
+      items.push({
+        category: 'benchmark',
+        dimension: 'conversion',
+        key: '新粉转化率',
+        value: `${newoldData.nconversionRate}%`,
+        source,
+      });
+    }
+    if (newoldData.oconversionRate) {
+      items.push({
+        category: 'benchmark',
+        dimension: 'conversion',
+        key: '老粉转化率',
+        value: `${newoldData.oconversionRate}%`,
+        source,
+      });
+    }
+
+    // ---- 模式类知识 (pattern) ----
+    // 流量高峰时段识别
+    const onlineList = (chartData.onlineUserCntList as number[]) || [];
+    const xis = (chartData.xis as string[]) || [];
+    if (onlineList.length > 0 && xis.length > 0) {
+      const maxIdx = onlineList.indexOf(Math.max(...onlineList));
+      const minIdx = onlineList.indexOf(Math.min(...onlineList.filter(v => v > 0)));
+      if (maxIdx >= 0 && xis[maxIdx]) {
+        items.push({
+          category: 'pattern',
+          dimension: 'rhythm',
+          key: '流量高峰时段',
+          value: `${xis[maxIdx]} (${onlineList[maxIdx]}人)`,
+          source,
+        });
+      }
+      if (minIdx >= 0 && xis[minIdx]) {
+        items.push({
+          category: 'pattern',
+          dimension: 'rhythm',
+          key: '流量低谷时段',
+          value: `${xis[minIdx]} (${onlineList[minIdx]}人)`,
+          source,
+        });
+      }
+    }
+
+    // 评论情绪分布
+    if (comments.length > 0) {
+      const positiveWords = ['好', '棒', '喜欢', '赞', '牛', '厉害', '买了', '下单', '已拍', '谢谢'];
+      const negativeWords = ['差', '烂', '垃圾', '骗', '假', '退', '差评', '失望', '不好', '贵'];
+      let posCnt = 0, negCnt = 0;
+      for (const c of comments) {
+        const content = String(c.content || '');
+        if (positiveWords.some(w => content.includes(w))) posCnt++;
+        if (negativeWords.some(w => content.includes(w))) negCnt++;
+      }
+      items.push({
+        category: 'pattern',
+        dimension: 'sentiment',
+        key: '评论情绪分布',
+        value: `正面${posCnt}条(${(posCnt/comments.length*100).toFixed(1)}%), 负面${negCnt}条(${(negCnt/comments.length*100).toFixed(1)}%)`,
+        source,
+      });
+    }
+
+    // 商品漏斗模式
+    if (orderDetails.length > 0) {
+      const unpaidCnt = orderDetails.filter(o => String(o.payStatus) === 'NOTPAY').length;
+      const paidCnt = orderDetails.filter(o => String(o.payStatus) === 'SUCCESS').length;
+      if (unpaidCnt > 0 || paidCnt > 0) {
+        const totalOrders = unpaidCnt + paidCnt;
+        const unpaidRate = (unpaidCnt / totalOrders * 100).toFixed(1);
+        items.push({
+          category: 'pattern',
+          dimension: 'conversion',
+          key: '下单未支付率',
+          value: `${unpaidRate}% (${unpaidCnt}/${totalOrders})`,
+          source,
+        });
+      }
+    }
+  }
+
+  // ---- 规则类知识 (rule) ----
+  // 从分析文本中提取改进建议作为规则
+  const suggestionPatterns = [
+    { regex: /建议(.{5,50})/g, dimension: 'general' },
+    { regex: /优化(.{5,50})/g, dimension: 'general' },
+    { regex: /可以(.{5,50}话术.{0,20})/g, dimension: 'anchor' },
+    { regex: /增加(.{5,30})提示/g, dimension: 'conversion' },
+  ];
+
+  let ruleCount = 0;
+  for (const { regex, dimension } of suggestionPatterns) {
+    const matches = [...analysisText.matchAll(regex)];
+    for (const match of matches) {
+      if (ruleCount >= 5) break; // 最多提取5条规则
+      const suggestion = match[1] || match[0];
+      if (suggestion.length >= 5 && suggestion.length <= 60) {
+        items.push({
+          category: 'rule',
+          dimension,
+          key: '改进建议',
+          value: suggestion,
+          source,
+        });
+        ruleCount++;
+      }
+    }
+    if (ruleCount >= 5) break;
+  }
+
+  return items;
+}
+
+/**
+ * 保存知识条目到数据库（upsert with confidence tracking）
+ */
+async function saveKnowledgeItems(items: KnowledgeItem[]): Promise<number> {
+  const client = getSupabaseClient();
+  let saved = 0;
+
+  for (const item of items) {
+    // 检查是否已存在相同知识
+    const { data: existing } = await client
+      .from('analysis_knowledge')
+      .select('id, confidence, sample_count, value, source')
+      .eq('category', item.category)
+      .eq('dimension', item.dimension)
+      .eq('key', item.key)
+      .maybeSingle();
+
+    if (existing) {
+      // 已存在：更新置信度和样本数
+      const newConfidence = Math.min(5, existing.confidence + 1);
+      const newSampleCount = existing.sample_count + 1;
+
+      // 如果值差异大，降低置信度（说明知识不稳定）
+      const valueChanged = existing.value !== item.value;
+      const adjustedConfidence = valueChanged ? Math.max(1, existing.confidence - 1) : newConfidence;
+
+      await client
+        .from('analysis_knowledge')
+        .update({
+          value: valueChanged ? `${existing.value} | ${item.value}` : item.value,
+          confidence: adjustedConfidence,
+          sample_count: newSampleCount,
+          last_validated_at: new Date().toISOString(),
+          source: `${existing.source}, ${item.source}`,
+        })
+        .eq('id', existing.id);
+    } else {
+      // 不存在：插入新知识
+      await client.from('analysis_knowledge').insert({
+        category: item.category,
+        dimension: item.dimension,
+        key: item.key,
+        value: item.value,
+        source: item.source,
+        confidence: 1,
+        sample_count: 1,
+        last_validated_at: new Date().toISOString(),
+      });
+    }
+    saved++;
+  }
+
+  return saved;
+}
+
+/**
+ * 用最新知识重建Skill并保存为新版本
+ */
+async function rebuildAndSaveSkill(currentVersion: string, sourceSession: number): Promise<void> {
+  const knowledgeContext = await buildKnowledgeContext();
+  const fullSkill = knowledgeContext
+    ? `${ANALYSIS_FRAMEWORK}\n\n${knowledgeContext}`
+    : ANALYSIS_FRAMEWORK;
+
+  const versionNum = parseInt(currentVersion.replace('v', ''), 10) || 1;
+  const newVersion = `v${versionNum + 1}`;
+
+  const client = getSupabaseClient();
+
+  // 将旧版本标记为非活跃
+  await client
+    .from('skill_versions')
+    .update({ is_active: 0 })
+    .eq('is_active', 1);
+
+  // 插入新版本
+  await client.from('skill_versions').insert({
+    version: newVersion,
+    content: fullSkill,
+    change_log: `session_${sourceSession} 分析后自动积累知识，重建Skill`,
+    is_active: 1,
+    knowledge_snapshot: knowledgeContext,
+  });
+}
+
+/**
+ * 评估分析质量并提取知识（替代旧的evaluateAndOptimizeSkill）
+ */
+async function extractAndSaveKnowledge(
+  snapshotData: Record<string, unknown>[],
+  analysisText: string,
+  sessionId: number,
+  currentVersion: string
+): Promise<void> {
+  try {
+    // 1. 从数据和分析中提取知识
+    const knowledgeItems = extractKnowledgeFromAnalysis(snapshotData, analysisText, sessionId);
+    console.log(`[Knowledge] 从session_${sessionId}提取${knowledgeItems.length}条知识`);
+
+    // 2. 保存知识到数据库
+    const savedCount = await saveKnowledgeItems(knowledgeItems);
+    console.log(`[Knowledge] 保存/更新${savedCount}条知识`);
+
+    // 3. 检查是否需要重建Skill（每积累10条新知识或每3次分析）
+    const { count } = await getSupabaseClient()
+      .from('analysis_knowledge')
+      .select('*', { count: 'exact' })
+      .gte('confidence', 2);
+
+    const shouldRebuild = (count || 0) >= 10 && knowledgeItems.length >= 3;
+    if (shouldRebuild) {
+      await rebuildAndSaveSkill(currentVersion, sessionId);
+      console.log(`[Knowledge] Skill已重建升级`);
+    }
+  } catch (err) {
+    console.error('[Knowledge] 知识提取失败:', err instanceof Error ? err.message : err);
+  }
+}
+
+// ==================== 公开 API ====================
+
+/**
+ * 执行分析（片段/终场）
+ */
+export async function runAnalysis(
+  sessionId: number,
+  roomId: string,
+  segmentSeq: number,
+  reportType: 'segment' | 'final'
+): Promise<number> {
+  const client = getSupabaseClient();
+
+  // 获取会话信息（含主播名称和模板名称）
+  const { data: sessionInfo } = await client
+    .from('live_sessions')
+    .select('room_name, anchor_name, room_type, template_name')
+    .eq('id', sessionId)
+    .maybeSingle();
+
+  // 如果是智能直播且有模板名称，检查是否已有相同模板的终场分析
+  const templateName = sessionInfo?.template_name;
+  const isIntelligentLive = sessionInfo?.room_type === 'intelligence' && templateName;
+  
+  if (isIntelligentLive && reportType === REPORT_TYPE.FINAL) {
+    // 查找相同模板名称的已完成终场分析
+    const { data: existingReports } = await client
+      .from('analysis_reports')
+      .select('id, session_id, created_at')
+      .eq('report_type', REPORT_TYPE.FINAL)
+      .eq('session_id', sessionId)
+      .limit(1);
+      
+    // 也查找其他使用相同模板的会话的终场分析
+    const { data: otherTemplateReports } = await client
+      .from('analysis_reports')
+      .select('id, session_id, created_at')
+      .eq('report_type', REPORT_TYPE.FINAL)
+      .limit(10)
+      .order('created_at', { ascending: false });
+      
+    // 对于相同模板的情况，我们记录一下，但仍然继续分析（因为可能有新的内容）
+    // 这里我们可以添加逻辑来避免重复，但先保留分析功能
+  }
+
+  const anchorName = sessionInfo?.anchor_name || (sessionInfo?.room_name ? resolveAnchorName(sessionInfo.room_name) : '未知主播');
+
+  // 更新 anchor_name（如果还没有的话）
+  if (sessionInfo && !sessionInfo.anchor_name) {
+    await client.from('live_sessions').update({ anchor_name: anchorName }).eq('id', sessionId);
+  }
+
+  // 获取快照数据
+  const snapshots = await getSessionSnapshots(sessionId);
+
+  if (snapshots.length === 0) {
+    throw new Error('没有快照数据可供分析');
+  }
+
+  // 终场分析使用所有快照，片段分析只使用对应快照
+  let analysisSnapshots = reportType === REPORT_TYPE.FINAL
+    ? snapshots
+    : snapshots.filter((s) => s.snapshot_seq === segmentSeq);
+
+  if (analysisSnapshots.length === 0 && reportType !== REPORT_TYPE.FINAL) {
+    // 如果指定片段没有数据，使用最新的快照
+    analysisSnapshots = [snapshots[snapshots.length - 1]];
+  }
+
+  // 从快照中提取商品名称列表（用于获取商品记忆）
+  const goodsNames = extractGoodsNamesFromSnapshots(analysisSnapshots.length > 0 ? analysisSnapshots : snapshots);
+
+  // 获取记忆上下文
+  const memoryContext = await memoryManager.getContextForAnalysis(anchorName, goodsNames);
+  const formattedMemoryContext = memoryManager.formatMemoryForPrompt(memoryContext);
+
+  // 获取当前 Skill
+  const skill = await getActiveSkill();
+
+  // 获取历史脚本和商品基准数据
+  const [historicalScripts, productBenchmarks] = await Promise.all([
+    getHistoricalScripts(),
+    getProductBenchmarks(),
+  ]);
+  const historicalContext = [formattedMemoryContext, historicalScripts, productBenchmarks].filter(Boolean).join('\n\n');
+
+  // 终场分析时获取前一场对比和跨主播基准对比
+  let previousSessionComparison = '';
+  let benchmarkAnchorData = '';
+  if (reportType === REPORT_TYPE.FINAL) {
+    [previousSessionComparison, benchmarkAnchorData] = await Promise.all([
+      getPreviousSessionComparison(sessionId, anchorName),
+      getBenchmarkAnchorData(anchorName),
+    ]);
+  }
+
+  // 构建分析 Prompt
+  const prompt = buildAnalysisPrompt(
+    skill.content,
+    analysisSnapshots.length > 0 ? analysisSnapshots : snapshots,
+    reportType,
+    segmentSeq,
+    historicalContext,
+    previousSessionComparison,
+    benchmarkAnchorData
+  );
+
+  // 调用 LLM 分析
+  const analysisText = await callLLMAnalysis(prompt);
+
+  // 提取五维分析和 JSON
+  const { json: jsonData, markdown: markdownText } = extractJsonAndMarkdown(analysisText);
+  const dimensions = extractDimensions(markdownText);
+  
+  const scores = jsonData?.scores || {};
+  const alerts = extractAlerts(markdownText, jsonData);
+  const actionItems = extractActionItems(markdownText, jsonData);
+  const highlights = extractHighlights(markdownText, jsonData);
+
+  // 存储分析报告（含主播名称和模板名称）
+  const { data, error } = await client
+    .from('analysis_reports')
+    .insert({
+      session_id: sessionId,
+      report_type: reportType,
+      segment_seq: segmentSeq,
+      anchor_analysis: dimensions.anchor_analysis,
+      interaction_analysis: dimensions.interaction_analysis,
+      conversion_analysis: dimensions.conversion_analysis,
+      sentiment_analysis: dimensions.sentiment_analysis,
+      rhythm_analysis: dimensions.rhythm_analysis,
+      analysis_text: markdownText,
+      analysis_json: jsonData,
+      skill_version: skill.version,
+      model_used: 'doubao-seed-2-0-pro-260215',
+      anchor_name: anchorName,
+      template_name: templateName,
+      room_type: sessionInfo?.room_type,
+      overall_score: scores.overall || null,
+      anchor_score: scores.anchor || null,
+      interaction_score: scores.interaction || null,
+      conversion_score: scores.conversion || null,
+      sentiment_score: scores.sentiment || null,
+      rhythm_score: scores.rhythm || null,
+    })
+    .select('id')
+    .single();
+
+  if (error) throw new Error(`存储分析报告失败: ${error.message}`);
+
+  // 知识积累（异步，不阻塞主流程）
+  extractAndSaveKnowledge(analysisSnapshots.length > 0 ? analysisSnapshots : snapshots, analysisText, sessionId, skill.version).catch((err) => {
+    console.error('[Knowledge] 知识提取异常:', err);
+  });
+
+  // 保存分析洞察到记忆系统（异步，不阻塞主流程）
+  if (reportType === REPORT_TYPE.FINAL) {
+    saveInsightsToMemory(
+      sessionId,
+      anchorName,
+      goodsNames,
+      analysisText,
+      jsonData,
+      'doubao-seed-2-0-pro-260215'
+    ).catch((err) => {
+      console.error('[Memory] 保存记忆异常:', err);
+    });
+  }
+
+  // 终场分析完成后自动填充直播脚本（异步）
+  if (reportType === REPORT_TYPE.FINAL) {
+    autoFillLiveScript(sessionId, anchorName, analysisText, analysisSnapshots.length > 0 ? analysisSnapshots : snapshots).catch((err) => {
+      console.error('[Script] 自动填充脚本失败:', err);
+    });
+  }
+
+  return data.id;
+}
+
+/**
+ * 分析完成后自动填充直播脚本到 live_scripts 表
+ */
+async function autoFillLiveScript(
+  sessionId: number,
+  anchorName: string,
+  analysisText: string,
+  snapshots: Record<string, unknown>[]
+): Promise<void> {
+  const client = getSupabaseClient();
+
+  // 获取会话信息
+  const { data: session } = await client
+    .from('live_sessions')
+    .select('room_name, start_time, end_time')
+    .eq('id', sessionId)
+    .maybeSingle();
+
+  if (!session) return;
+
+  const sessionDate = session.start_time
+    ? new Date(String(session.start_time)).toLocaleDateString('zh-CN')
+    : new Date().toLocaleDateString('zh-CN');
+
+  // 检查是否已有该场次的脚本
+  const { data: existing } = await client
+    .from('live_scripts')
+    .select('id')
+    .eq('session_date', sessionDate)
+    .eq('anchor_name', anchorName)
+    .maybeSingle();
+
+  if (existing) return; // 已有则不重复填充
+
+  // 从分析文本中提取关键词和内容要点
+  const anchorSection = analysisText.match(/###?\s*(?:主播话术|话术分析)[\s\S]*?(?=###?\s*(?:互动|商品|评论|直播|节奏|$))/i);
+  const conversionSection = analysisText.match(/###?\s*(?:商品转化|转化分析)[\s\S]*?(?=###?\s*(?:评论|直播|节奏|互动|主播|$))/i);
+
+  // 从快照数据提取商品和成交信息
+  const lastSnap = snapshots[snapshots.length - 1];
+  const rawJson = lastSnap?.raw_json as Record<string, unknown> | null;
+  const orderDetails = rawJson ? (rawJson.orderDetails as Record<string, unknown>[]) : [];
+  const orderSummary = rawJson ? (rawJson.orderSummary as Record<string, unknown>) : {};
+
+  // 商品列表
+  const productList = orderDetails
+    .filter((g: Record<string, unknown>) => g.goodsName)
+    .map((g: Record<string, unknown>) => `${g.goodsName}: 点击${g.clickCount || 0} / 下单${g.orderCount || 0} / 已付${g.paidCount || 0} / ¥${g.totalPaidAmount || 0}`)
+    .join('\n');
+
+  // 成交数据
+  const transactionData = [
+    `成交总额: ¥${orderSummary.totalAmount || 'N/A'}`,
+    `成交单数: ${orderSummary.paySuccessTotal || 'N/A'}`,
+    `支付人数: ${orderSummary.payUserTotal || 'N/A'}`,
+  ].join('\n');
+
+  // 关键词：从话术分析中提取
+  const keywords = anchorSection?.[0]
+    ? anchorSection[0].slice(0, 200).replace(/[#*\n]/g, ' ').trim()
+    : '';
+
+  // 内容要点：整场分析文本的前800字作为要点
+  const contentPoints = analysisText.slice(0, 800);
+
+  await client.from('live_scripts').insert({
+    session_date: sessionDate,
+    anchor_name: anchorName,
+    keywords: keywords.slice(0, 500) || null,
+    content_points: contentPoints || null,
+    product_list: productList || null,
+    transaction_data: transactionData || null,
+    source: `自动填充(session#${sessionId})`,
+  });
+
+  console.log(`[Script] 自动填充直播脚本: anchor=${anchorName}, date=${sessionDate}`);
+}
+
+/**
+ * 流式分析（用于前端实时展示）
+ */
+export async function* streamAnalysis(
+  sessionId: number,
+  roomId: string,
+  segmentSeq: number,
+  reportType: 'segment' | 'final'
+): AsyncGenerator<string> {
+  const client = getSupabaseClient();
+
+  // 获取会话信息（含主播名称）
+  const { data: sessionInfo } = await client
+    .from('live_sessions')
+    .select('room_name, anchor_name')
+    .eq('id', sessionId)
+    .maybeSingle();
+
+  const anchorName = sessionInfo?.anchor_name || (sessionInfo?.room_name ? resolveAnchorName(sessionInfo.room_name) : '未知主播');
+
+  // 更新 anchor_name（如果还没有的话）
+  if (sessionInfo && !sessionInfo.anchor_name) {
+    await client.from('live_sessions').update({ anchor_name: anchorName }).eq('id', sessionId);
+  }
+
+  const snapshots = await getSessionSnapshots(sessionId);
+  if (snapshots.length === 0) throw new Error('没有快照数据可供分析');
+
+  const analysisSnapshots = reportType === REPORT_TYPE.FINAL
+    ? snapshots
+    : snapshots.filter((s) => s.snapshot_seq === segmentSeq);
+
+  const skill = await getActiveSkill();
+
+  // 获取历史脚本和商品基准数据
+  const [historicalScripts, productBenchmarks] = await Promise.all([
+    getHistoricalScripts(),
+    getProductBenchmarks(),
+  ]);
+  const historicalContext = [historicalScripts, productBenchmarks].filter(Boolean).join('\n\n');
+
+  // 终场分析时获取前一场对比和跨主播基准对比
+  let previousSessionComparison = '';
+  let benchmarkAnchorData = '';
+  if (reportType === REPORT_TYPE.FINAL) {
+    [previousSessionComparison, benchmarkAnchorData] = await Promise.all([
+      getPreviousSessionComparison(sessionId, anchorName),
+      getBenchmarkAnchorData(anchorName),
+    ]);
+  }
+
+  const prompt = buildAnalysisPrompt(
+    skill.content,
+    analysisSnapshots.length > 0 ? analysisSnapshots : snapshots,
+    reportType,
+    segmentSeq,
+    historicalContext,
+    previousSessionComparison,
+    benchmarkAnchorData
+  );
+
+  const llmClient = new UniversalLLMClient();
+  await llmClient.initFromDb();
+
+  const messages = [
+    {
+      role: 'system' as const,
+      content: '你是一位专业的直播数据分析专家，擅长从多维度分析直播数据并给出可操作的改进建议。',
+    },
+    { role: 'user' as const, content: prompt },
+  ];
+
+  let fullText = '';
+
+  const stream = llmClient.stream(messages as any, {
+    temperature: 0.4,
+  });
+
+  for await (const chunk of stream) {
+    if (chunk.content) {
+      const text = chunk.content.toString();
+      fullText += text;
+      yield text;
+    }
+  }
+
+  // 流式完成后存储分析报告（含主播名称+结构化字段）
+  const { json: jsonData, markdown: markdownText } = extractJsonAndMarkdown(fullText);
+  const dimensions = extractDimensions(markdownText);
+  const scores = jsonData?.scores || {};
+  const alerts = extractAlerts(markdownText, jsonData);
+  const actionItems = extractActionItems(markdownText, jsonData);
+  const highlights = extractHighlights(markdownText, jsonData);
+
+  const { data: reportData, error: reportError } = await client.from('analysis_reports').insert({
+    session_id: sessionId,
+    report_type: reportType,
+    segment_seq: segmentSeq,
+    anchor_analysis: dimensions.anchor_analysis,
+    interaction_analysis: dimensions.interaction_analysis,
+    conversion_analysis: dimensions.conversion_analysis,
+    sentiment_analysis: dimensions.sentiment_analysis,
+    rhythm_analysis: dimensions.rhythm_analysis,
+    analysis_text: markdownText,
+    analysis_json: jsonData,
+    skill_version: skill.version,
+    model_used: 'doubao-seed-2-0-pro-260215',
+    anchor_name: anchorName,
+    overall_score: scores.overall || null,
+    anchor_score: scores.anchor || null,
+    interaction_score: scores.interaction || null,
+    conversion_score: scores.conversion || null,
+    sentiment_score: scores.sentiment || null,
+    rhythm_score: scores.rhythm || null,
+    alerts: alerts,
+    action_items: actionItems,
+    highlights: highlights,
+  }).select('id').single();
+
+  const reportId = reportData?.id;
+
+  // 保存预警到 live_alerts 表
+  saveAlerts(sessionId, alerts).catch((err) => {
+    console.error('[Alerts] 保存预警失败:', err);
+  });
+
+  // 保存行动项到 action_items 表（终场分析时）
+  if (reportType === REPORT_TYPE.FINAL && actionItems.length > 0) {
+    saveActionItems(sessionId, reportId, anchorName, actionItems, fullText.substring(0, 1000)).catch((err) => {
+      console.error('[ActionItems] 保存行动项失败:', err);
+    });
+  }
+
+  // 终场分析完成后自动填充直播脚本（异步）
+  if (reportType === REPORT_TYPE.FINAL) {
+    autoFillLiveScript(sessionId, anchorName, fullText, analysisSnapshots.length > 0 ? analysisSnapshots : snapshots).catch((err) => {
+      console.error('[Script] 自动填充脚本失败:', err);
+    });
+  }
+}
+
+// ==================== 录播回放分析 ====================
+
+/**
+ * 执行录播回放分析（完整分析）
+ */
+export async function runAnalysisForReplay(
+  sessionId: number,
+  roomId: string,
+  liveSpaceId: string
+): Promise<number> {
+  const client = getSupabaseClient();
+
+  // 获取会话信息（含主播名称）
+  const { data: sessionInfo } = await client
+    .from('live_sessions')
+    .select('room_name, anchor_name, start_time, end_time')
+    .eq('id', sessionId)
+    .maybeSingle();
+
+  const anchorName = sessionInfo?.anchor_name || (sessionInfo?.room_name ? extractAnchorName(sessionInfo.room_name) : '未知主播');
+
+  // 更新 anchor_name（如果还没有的话）
+  if (sessionInfo && !sessionInfo.anchor_name) {
+    await client.from('live_sessions').update({ anchor_name: anchorName }).eq('id', sessionId);
+  }
+
+  // 获取快照数据
+  const snapshots = await getSessionSnapshots(sessionId);
+
+  if (snapshots.length === 0) {
+    throw new Error('没有录播快照数据可供分析');
+  }
+
+  // 获取当前 Skill
+  const skill = await getActiveSkill();
+
+  // 构建录播分析专用的 prompt
+  const prompt = buildReplayAnalysisPrompt(
+    skill.content,
+    snapshots,
+    anchorName,
+    sessionInfo?.start_time,
+    sessionInfo?.end_time
+  );
+
+  // 调用 LLM 分析
+  const analysisText = await callLLMAnalysis(prompt);
+
+  // 提取五维分析和 JSON
+  const { json: jsonData, markdown: markdownText } = extractJsonAndMarkdown(analysisText);
+  const dimensions = extractDimensions(markdownText);
+  
+  const scores = jsonData?.scores || {};
+  const alerts = extractAlerts(markdownText, jsonData);
+  const actionItems = extractActionItems(markdownText, jsonData);
+  const highlights = extractHighlights(markdownText, jsonData);
+
+  // 存储分析报告（含主播名称）
+  const { data, error } = await client
+    .from('analysis_reports')
+    .insert({
+      session_id: sessionId,
+      report_type: 'final' as const,
+      segment_seq: 1,
+      anchor_analysis: dimensions.anchor_analysis,
+      interaction_analysis: dimensions.interaction_analysis,
+      conversion_analysis: dimensions.conversion_analysis,
+      sentiment_analysis: dimensions.sentiment_analysis,
+      rhythm_analysis: dimensions.rhythm_analysis,
+      analysis_text: markdownText,
+      analysis_json: jsonData,
+      skill_version: skill.version,
+      model_used: 'doubao-seed-2-0-pro-260215',
+      anchor_name: anchorName,
+      overall_score: scores.overall || null,
+      anchor_score: scores.anchor || null,
+      interaction_score: scores.interaction || null,
+      conversion_score: scores.conversion || null,
+      sentiment_score: scores.sentiment || null,
+      rhythm_score: scores.rhythm || null,
+      alerts: alerts,
+      action_items: actionItems,
+      highlights: highlights,
+    })
+    .select('id')
+    .single();
+
+  if (error) throw new Error(`存储录播分析报告失败: ${error.message}`);
+
+  // 知识积累（异步，不阻塞主流程）
+  extractAndSaveKnowledge(snapshots, analysisText, sessionId, skill.version).catch((err) => {
+    console.error('[Knowledge] 录播知识提取异常:', err);
+  });
+
+  // 自动填充直播脚本
+  autoFillLiveScript(sessionId, anchorName, analysisText, snapshots).catch((err) => {
+    console.error('[Script] 自动填充脚本失败:', err);
+  });
+
+  return data.id;
+}
+
+/**
+ * 构建录播分析 Prompt
+ */
+function buildReplayAnalysisPrompt(
+  skillContent: string,
+  snapshotData: Record<string, unknown>[],
+  anchorName: string,
+  startTime: string | null,
+  endTime: string | null
+): string {
+  // 构建完整数据
+  const dataSummary = snapshotData.map((snap, idx) => {
+    const rawJson = snap.raw_json as Record<string, unknown> | null;
+    if (!rawJson) return '';
+
+    const analysis = (rawJson.analysis as Record<string, unknown>) || {};
+    const newoldData = (rawJson.newoldData as Record<string, string>) || {};
+    const chartData = (rawJson.chartData as Record<string, unknown>) || {};
+    const orderAnalysis = (rawJson.orderAnalysis as Record<string, unknown>) || {};
+
+    return `
+--- 录播数据 ${idx + 1} ---
+
+【核心指标】
+- 观看人数: ${analysis.watcherCnt || 'N/A'}
+- 观看次数: ${analysis.viewCnt || 'N/A'}
+- 峰值在线: ${analysis.peakConcurrentViewers || 'N/A'}
+- 平均观看时长: ${analysis.avgWatchTime ? `${analysis.avgWatchTime}秒` : 'N/A'}
+- 完播人数: ${analysis.complateCnt || 'N/A'}
+- 完播率: ${analysis.completionRate || 'N/A'}
+- 评论人数: ${analysis.commenterCnt || 'N/A'}
+- 评论数: ${analysis.commentCnt || 'N/A'}
+- 互动率: ${analysis.interactionRate || 'N/A'}%
+- 商品页浏览: ${analysis.mallPageViewCnt || 'N/A'}
+- 商品点击: ${analysis.productClickCnt || 'N/A'}
+- 成交单数: ${analysis.transactionCnt || 'N/A'}
+- 成交金额: ¥${analysis.transactionAmount || 'N/A'}
+
+【录播专属指标】
+- 录播观看人数: ${analysis.replyWatcherCnt || 'N/A'}
+- 录播观看次数: ${analysis.replyViewCnt || 'N/A'}
+- 录播平均观看时长: ${analysis.replyAvgWatchTime ? `${analysis.replyAvgWatchTime}秒` : 'N/A'}
+
+【新老粉数据】
+- 新学员数: ${newoldData.nwatcherCnt || 'N/A'}
+- 新学员转化率: ${newoldData.nconversionRate || 'N/A'}%
+- 老学员数: ${newoldData.owatcherCnt || 'N/A'}
+- 老学员转化率: ${newoldData.oconversionRate || 'N/A'}%
+
+【订单分析】
+- 支付人数总计: ${orderAnalysis.payUserTotal || 'N/A'}
+- 支付成功总计: ${orderAnalysis.paySuccessTotal || 'N/A'}
+- 总金额: ¥${orderAnalysis.totalAmount || 'N/A'}
+
+【时间趋势数据】
+${extractChartWindow(chartData, null, null)}
+`;
+  }).join('\n');
+
+  const sessionTimeInfo = startTime && endTime
+    ? `录播时间: ${new Date(startTime).toLocaleString('zh-CN')} ~ ${new Date(endTime).toLocaleString('zh-CN')}`
+    : '录播时间: 未知';
+
+  return `${skillContent}
+
+---
+
+## 录播回放分析任务
+
+【基本信息】
+- 主播: ${anchorName}
+- ${sessionTimeInfo}
+
+请对以下录播数据进行**完整分析**。这是一场录播回放（智能直播），请特别关注：
+1. 录播的完播率和平均观看时长
+2. 新老粉在录播中的转化情况
+3. 录播互动效果与实时直播的对比
+4. 商品点击和转化在录播中的表现
+5. 评论中的常见问题和反馈
+
+${dataSummary}
+
+---
+
+请严格遵守前面定义的五维分析框架输出分析结果：
+- 每个维度使用 ### 标题
+- 包含具体数据引用
+- 给出可操作的改进建议
+- 最后必须输出 JSON 结构，用 \`\`\`json 包裹
+`;
+}
+
+// ==================== 记忆系统集成 ====================
+
+/**
+ * 从快照数据中提取商品名称列表
+ */
+function extractGoodsNamesFromSnapshots(snapshots: Record<string, unknown>[]): string[] {
+  const goodsNames = new Set<string>();
+  
+  for (const snap of snapshots) {
+    const rawJson = snap.raw_json as Record<string, unknown> | null;
+    if (!rawJson) continue;
+    
+    const orderDetails = rawJson.orderDetails as Record<string, unknown>[] | null;
+    if (orderDetails && orderDetails.length > 0) {
+      for (const order of orderDetails) {
+        const goodsName = String(order.goodsName || order.productName || '');
+        if (goodsName) {
+          goodsNames.add(goodsName);
+        }
+      }
+    }
+  }
+  
+  return Array.from(goodsNames);
+}
+
+/**
+ * 将分析洞察保存到记忆系统
+ */
+async function saveInsightsToMemory(
+  sessionId: number,
+  anchorName: string,
+  goodsNames: string[],
+  analysisText: string,
+  jsonData: any,
+  modelUsed: string
+): Promise<void> {
+  try {
+    // 提取关键洞察
+    const keyInsights = extractKeyInsights(analysisText, jsonData);
+    const whatWorked = extractWhatWorked(analysisText);
+    const whatFailed = extractWhatFailed(analysisText);
+    
+    // 保存会话记忆
+    await memoryManager.createSessionMemory(
+      sessionId,
+      {
+        key_insights: keyInsights,
+        what_worked: whatWorked,
+        what_failed: whatFailed,
+        action_outcomes: jsonData?.action_items || [],
+        new_learnings: extractNewLearnings(analysisText),
+      },
+      memoryManager.getModelIdentifier('volcengine', modelUsed)
+    );
+    
+    // 更新主播记忆
+    const existingAnchorMemory = await memoryManager.getAnchorMemory(anchorName);
+    const newLearnings = extractNewLearnings(analysisText);
+    
+    if (existingAnchorMemory) {
+      await memoryManager.createOrUpdateAnchorMemory(
+        anchorName,
+        {
+          key_observations: [...(existingAnchorMemory.key_observations || []), ...keyInsights].slice(-50),
+          strengths: [...(existingAnchorMemory.strengths || []), ...whatWorked].slice(-20),
+          improvement_areas: [...(existingAnchorMemory.improvement_areas || []), ...whatFailed].slice(-20),
+          historical_summary: updateHistoricalSummary(existingAnchorMemory.historical_summary, analysisText),
+        },
+        memoryManager.getModelIdentifier('volcengine', modelUsed)
+      );
+    } else {
+      await memoryManager.createOrUpdateAnchorMemory(
+        anchorName,
+        {
+          key_observations: keyInsights,
+          strengths: whatWorked,
+          improvement_areas: whatFailed,
+          historical_summary: analysisText.slice(0, 500),
+        },
+        memoryManager.getModelIdentifier('volcengine', modelUsed)
+      );
+    }
+    
+    // 更新商品记忆
+    for (const goodsName of goodsNames) {
+      const productInsights = extractProductInsights(analysisText, goodsName);
+      const existingProductMemory = await memoryManager.getProductMemory(goodsName);
+      
+      if (existingProductMemory) {
+        await memoryManager.createOrUpdateProductMemory(
+          goodsName,
+          {
+            conversion_insights: [...(existingProductMemory.conversion_insights || []), ...productInsights].slice(-30),
+            optimal_pitches: [...(existingProductMemory.optimal_pitches || []), ...extractOptimalPitches(analysisText, goodsName)].slice(-20),
+            performance_summary: updatePerformanceSummary(existingProductMemory.performance_summary, analysisText, goodsName),
+          },
+          memoryManager.getModelIdentifier('volcengine', modelUsed)
+        );
+      } else {
+        await memoryManager.createOrUpdateProductMemory(
+          goodsName,
+          {
+            conversion_insights: productInsights,
+            optimal_pitches: extractOptimalPitches(analysisText, goodsName),
+            performance_summary: extractPerformanceSummary(analysisText, goodsName),
+          },
+          memoryManager.getModelIdentifier('volcengine', modelUsed)
+        );
+      }
+    }
+    
+    console.log(`[Memory] 保存分析洞察到记忆系统: session=${sessionId}, anchor=${anchorName}`);
+  } catch (err) {
+    console.error('[Memory] 保存记忆失败:', err);
+  }
+}
+
+/**
+ * 从分析文本中提取关键洞察
+ */
+function extractKeyInsights(analysisText: string, jsonData: any): string[] {
+  const insights: string[] = [];
+  
+  // 从 JSON 数据中提取亮点
+  if (jsonData?.highlights && Array.isArray(jsonData.highlights)) {
+    for (const highlight of jsonData.highlights) {
+      if (highlight.title) {
+        insights.push(highlight.title);
+      }
+    }
+  }
+  
+  // 从文本中提取关键句子
+  const sentences = analysisText.split(/[。！？\n]/).filter(s => s.trim().length > 10);
+  for (const sentence of sentences.slice(0, 10)) {
+    if (sentence.includes('关键') || sentence.includes('重要') || sentence.includes('发现')) {
+      insights.push(sentence.trim());
+    }
+  }
+  
+  return insights.slice(0, 20);
+}
+
+/**
+ * 从分析文本中提取做得好的部分
+ */
+function extractWhatWorked(analysisText: string): string[] {
+  const worked: string[] = [];
+  const keywords = ['做得好', '优势', '优秀', '成功', '亮点', '值得肯定'];
+  
+  const sentences = analysisText.split(/[。！？\n]/).filter(s => s.trim().length > 10);
+  for (const sentence of sentences) {
+    if (keywords.some(kw => sentence.includes(kw))) {
+      worked.push(sentence.trim());
+    }
+  }
+  
+  return worked.slice(0, 10);
+}
+
+/**
+ * 从分析文本中提取需要改进的部分
+ */
+function extractWhatFailed(analysisText: string): string[] {
+  const failed: string[] = [];
+  const keywords = ['需要改进', '问题', '不足', '缺点', '薄弱', '优化'];
+  
+  const sentences = analysisText.split(/[。！？\n]/).filter(s => s.trim().length > 10);
+  for (const sentence of sentences) {
+    if (keywords.some(kw => sentence.includes(kw))) {
+      failed.push(sentence.trim());
+    }
+  }
+  
+  return failed.slice(0, 10);
+}
+
+/**
+ * 从分析文本中提取新学习到的经验
+ */
+function extractNewLearnings(analysisText: string): string[] {
+  const learnings: string[] = [];
+  const keywords = ['学到', '经验', '教训', '总结', '启示'];
+  
+  const sentences = analysisText.split(/[。！？\n]/).filter(s => s.trim().length > 10);
+  for (const sentence of sentences) {
+    if (keywords.some(kw => sentence.includes(kw))) {
+      learnings.push(sentence.trim());
+    }
+  }
+  
+  return learnings.slice(0, 10);
+}
+
+/**
+ * 更新主播历史总结
+ */
+function updateHistoricalSummary(existingSummary: string | undefined, newAnalysis: string): string {
+  const oldSummary = existingSummary || '';
+  const newSummary = newAnalysis.slice(0, 300);
+  
+  if (oldSummary.length === 0) {
+    return newSummary;
+  }
+  
+  return `${oldSummary.slice(0, 200)}\n\n${new Date().toLocaleDateString('zh-CN')}: ${newSummary.slice(0, 200)}`;
+}
+
+/**
+ * 提取商品特定洞察
+ */
+function extractProductInsights(analysisText: string, goodsName: string): string[] {
+  const insights: string[] = [];
+  const sentences = analysisText.split(/[。！？\n]/).filter(s => s.trim().length > 10);
+  
+  for (const sentence of sentences) {
+    if (sentence.includes(goodsName)) {
+      insights.push(sentence.trim());
+    }
+  }
+  
+  return insights.slice(0, 10);
+}
+
+/**
+ * 提取商品最佳话术
+ */
+function extractOptimalPitches(analysisText: string, goodsName: string): string[] {
+  const pitches: string[] = [];
+  const keywords = ['话术', '介绍', '推荐', '卖点'];
+  
+  const sentences = analysisText.split(/[。！？\n]/).filter(s => s.trim().length > 10);
+  for (const sentence of sentences) {
+    if (sentence.includes(goodsName) && keywords.some(kw => sentence.includes(kw))) {
+      pitches.push(sentence.trim());
+    }
+  }
+  
+  return pitches.slice(0, 5);
+}
+
+/**
+ * 提取商品表现总结
+ */
+function extractPerformanceSummary(analysisText: string, goodsName: string): string {
+  const relevantParts = analysisText.split(/###?/).filter(part => part.includes(goodsName));
+  if (relevantParts.length > 0) {
+    return relevantParts[0].slice(0, 300);
+  }
+  return analysisText.slice(0, 200);
+}
+
+/**
+ * 更新商品表现总结
+ */
+function updatePerformanceSummary(existingSummary: string | undefined, newAnalysis: string, goodsName: string): string {
+  const oldSummary = existingSummary || '';
+  const newSummary = extractPerformanceSummary(newAnalysis, goodsName);
+  
+  if (oldSummary.length === 0) {
+    return newSummary;
+  }
+  
+  return `${oldSummary.slice(0, 200)}\n\n${new Date().toLocaleDateString('zh-CN')}: ${newSummary.slice(0, 200)}`;
+}
+
+// ==================== 商品作战卡分析 ====================
+
+/**
+ * 分析商品的历史表现并生成作战卡
+ */
+export async function analyzeProduct(productData: {
+  goods_name: string;
+  summary: {
+    total_sessions: number;
+    total_clicks: number;
+    total_orders: number;
+    total_paid: number;
+    total_amount: number;
+    avg_click_to_order_rate: string;
+    avg_order_to_pay_rate: string;
+    avg_click_to_pay_rate: string;
+    avg_amount_per_session: string;
+  };
+  best_session: any;
+  worst_session: any;
+  recent_sessions: any[];
+}): Promise<string> {
+  // 获取商品记忆
+  const productMemory = await memoryManager.getProductMemory(productData.goods_name);
+  const memoryContext = productMemory ? memoryManager.formatMemoryForPrompt({
+    anchorMemory: null,
+    productMemories: [productMemory],
+    recentSessionMemories: [],
+    generalKnowledge: [],
+  }) : '';
+  
+  const llmClient = new UniversalLLMClient();
+  await llmClient.initFromDb();
+
+  const prompt = buildProductAnalysisPrompt(productData, memoryContext);
+
+  const messages = [
+    {
+      role: 'system' as const,
+      content: '你是一位专业的直播商品分析专家，擅长根据商品的历史销售数据，分析商品表现、给出优化建议，并生成商品作战卡。',
+    },
+    { role: 'user' as const, content: prompt },
+  ];
+
+  const response = await llmClient.invoke(messages as any, {
+    temperature: 0.4,
+  });
+
+  return response;
+}
+
+/**
+ * 构建商品分析 Prompt
+ */
+function buildProductAnalysisPrompt(productData: {
+  goods_name: string;
+  summary: {
+    total_sessions: number;
+    total_clicks: number;
+    total_orders: number;
+    total_paid: number;
+    total_amount: number;
+    avg_click_to_order_rate: string;
+    avg_order_to_pay_rate: string;
+    avg_click_to_pay_rate: string;
+    avg_amount_per_session: string;
+  };
+  best_session: any;
+  worst_session: any;
+  recent_sessions: any[];
+}, memoryContext: string = ''): string {
+  // 格式化最佳场次信息
+  const bestSessionInfo = productData.best_session ? `
+【最佳场次】
+- 直播间: ${productData.best_session.live_sessions?.room_name || '未知'}
+- 主播: ${productData.best_session.live_sessions?.anchor_name || '未知'}
+- 时间: ${productData.best_session.snapshot_time ? new Date(productData.best_session.snapshot_time).toLocaleString('zh-CN') : '未知'}
+- 点击数: ${productData.best_session.click_count || 0}
+- 下单数: ${productData.best_session.order_count || 0}
+- 支付数: ${productData.best_session.paid_count || 0}
+- 成交金额: ¥${productData.best_session.pay_amount || 0}
+` : '';
+
+  // 格式化最差场次信息
+  const worstSessionInfo = productData.worst_session ? `
+【最差场次】
+- 直播间: ${productData.worst_session.live_sessions?.room_name || '未知'}
+- 主播: ${productData.worst_session.live_sessions?.anchor_name || '未知'}
+- 时间: ${productData.worst_session.snapshot_time ? new Date(productData.worst_session.snapshot_time).toLocaleString('zh-CN') : '未知'}
+- 点击数: ${productData.worst_session.click_count || 0}
+- 下单数: ${productData.worst_session.order_count || 0}
+- 支付数: ${productData.worst_session.paid_count || 0}
+- 成交金额: ¥${productData.worst_session.pay_amount || 0}
+` : '';
+
+  // 格式化近期场次信息
+  const recentSessionsInfo = productData.recent_sessions && productData.recent_sessions.length > 0 ? `
+【近期场次表现】
+${productData.recent_sessions.slice(0, 5).map((session: any, index: number) => `
+场次 ${index + 1}:
+- 直播间: ${session.room_name || '未知'}
+- 主播: ${session.anchor_name || '未知'}
+- 时间: ${session.start_time ? new Date(session.start_time).toLocaleString('zh-CN') : '未知'}
+`).join('')}
+` : '';
+
+  return `
+# 商品作战卡分析任务
+
+${memoryContext ? `
+【历史记忆上下文】
+${memoryContext}
+` : ''}
+
+【商品基本信息】
+- 商品名称: ${productData.goods_name}
+
+【历史数据汇总】
+- 累计上播场次: ${productData.summary.total_sessions}
+- 累计点击数: ${productData.summary.total_clicks}
+- 累计下单数: ${productData.summary.total_orders}
+- 累计支付数: ${productData.summary.total_paid}
+- 累计成交金额: ¥${productData.summary.total_amount}
+- 场均成交金额: ¥${productData.summary.avg_amount_per_session}
+
+【转化漏斗】
+- 点击→下单转化率: ${productData.summary.avg_click_to_order_rate}%
+- 下单→支付转化率: ${productData.summary.avg_order_to_pay_rate}%
+- 点击→支付转化率: ${productData.summary.avg_click_to_pay_rate}%
+
+${bestSessionInfo}
+
+${worstSessionInfo}
+
+${recentSessionsInfo}
+
+---
+
+请根据以上数据，为该商品生成一份详细的作战卡分析报告，包含以下内容：
+
+1. **商品概况**（150字以内）：简要总结商品的整体表现
+
+2. **核心指标分析**：
+   - 分析点击→下单→支付各环节的转化情况
+   - 指出转化漏斗中的薄弱环节
+
+3. **最佳场次复盘**：
+   - 分析最佳场次的成功因素
+   - 提取可复用的经验
+
+4. **问题诊断**：
+   - 分析最差场次的问题所在
+   - 指出需要改进的地方
+
+5. **优化建议**：
+   - 针对商品介绍话术的建议
+   - 针对价格策略的建议
+   - 针对展示方式的建议
+   - 针对上播时机的建议
+
+6. **行动清单**：
+   - 列出3-5条具体可执行的优化动作
+
+请用 Markdown 格式输出，标题层级清晰，数据引用准确，建议具体可操作。
+`;
+}
+

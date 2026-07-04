@@ -1,0 +1,279 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Clock, Activity, MessageSquare, ShoppingBag, AlertTriangle, PlayCircle, Search } from 'lucide-react';
+import { format } from 'date-fns';
+import { zhCN } from 'date-fns/locale';
+
+interface TimelineEvent {
+  id: number;
+  session_id: number;
+  timestamp: string;
+  offset_seconds: number;
+  event_type: string;
+  content: string;
+  metrics: any;
+  source: string;
+  importance: 'low' | 'medium' | 'high';
+}
+
+interface MinuteMetric {
+  minute_index: number;
+  online_count: number;
+  comment_count: number;
+  order_count: number;
+  paid_amount: number;
+}
+
+export default function TimelinePage() {
+  const [sessions, setSessions] = useState<{id: number, room_name: string, start_time: string}[]>([]);
+  const [selectedSession, setSelectedSession] = useState<string>('');
+  const [events, setEvents] = useState<TimelineEvent[]>([]);
+  const [metrics, setMetrics] = useState<MinuteMetric[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [filterSource, setFilterSource] = useState('all');
+
+  // Load recent sessions first
+  useEffect(() => {
+    const fetchSessions = async () => {
+      try {
+        const res = await fetch('/api/sessions');
+        if (res.ok) {
+          const data = await res.json();
+          // 处理两种可能的格式：data.data.sessions 或直接 data.data
+          let sessions = [];
+          if (data.data?.sessions && Array.isArray(data.data.sessions)) {
+            sessions = data.data.sessions;
+          } else if (data.data && Array.isArray(data.data)) {
+            sessions = data.data;
+          }
+          
+          if (sessions.length > 0) {
+            setSessions(sessions);
+            setSelectedSession(sessions[0].id.toString());
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch sessions:', err);
+      }
+    };
+    fetchSessions();
+  }, []);
+
+  // Load timeline data when session changes
+  useEffect(() => {
+    if (!selectedSession) return;
+    
+    const fetchTimelineData = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/timeline?session_id=${selectedSession}`);
+        if (res.ok) {
+          const data = await res.json();
+          // Mock data if empty for demonstration
+          if (!data.data.events || data.data.events.length === 0) {
+            setEvents(generateMockEvents());
+          } else {
+            setEvents(data.data.events);
+          }
+          setMetrics(data.data.metrics || []);
+        }
+      } catch (error) {
+        console.error('Failed to fetch timeline:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchTimelineData();
+  }, [selectedSession]);
+
+  const generateMockEvents = (): TimelineEvent[] => {
+    const now = new Date();
+    return [
+      { id: 1, session_id: Number(selectedSession), timestamp: new Date(now.getTime() - 3600000).toISOString(), offset_seconds: 0, event_type: 'stream_start', content: '直播正式开始', metrics: { online: 120 }, source: 'system', importance: 'medium' },
+      { id: 2, session_id: Number(selectedSession), timestamp: new Date(now.getTime() - 3000000).toISOString(), offset_seconds: 600, event_type: 'online_peak', content: '在线人数突破 500 人峰值', metrics: { online: 520 }, source: 'chart', importance: 'high' },
+      { id: 3, session_id: Number(selectedSession), timestamp: new Date(now.getTime() - 2400000).toISOString(), offset_seconds: 1200, event_type: 'product_start', content: '开始讲解爆款商品 A', metrics: null, source: 'ai', importance: 'medium' },
+      { id: 4, session_id: Number(selectedSession), timestamp: new Date(now.getTime() - 2100000).toISOString(), offset_seconds: 1500, event_type: 'script_key_point', content: '主播话术：抛出价格锚点并强调限时权益', metrics: null, source: 'asr', importance: 'high' },
+      { id: 5, session_id: Number(selectedSession), timestamp: new Date(now.getTime() - 1800000).toISOString(), offset_seconds: 1800, event_type: 'payment_peak', content: '商品 A 迎来集中支付爆发', metrics: { paid_count: 45, amount: 8900 }, source: 'order', importance: 'high' },
+      { id: 6, session_id: Number(selectedSession), timestamp: new Date(now.getTime() - 1200000).toISOString(), offset_seconds: 2400, event_type: 'high_value_question', content: '评论区集中提问："适用人群是哪些？"', metrics: { count: 12 }, source: 'comment', importance: 'medium' },
+      { id: 7, session_id: Number(selectedSession), timestamp: new Date(now.getTime() - 900000).toISOString(), offset_seconds: 2700, event_type: 'alert_triggered', content: '转化预警：点击高但支付转化率大幅下降', metrics: { click: 230, pay: 2 }, source: 'ai', importance: 'high' },
+    ];
+  };
+
+  const getEventIcon = (source: string, type: string) => {
+    if (type.includes('peak') || source === 'chart') return <Activity className="w-4 h-4 text-blue-500" />;
+    if (source === 'comment') return <MessageSquare className="w-4 h-4 text-green-500" />;
+    if (source === 'order') return <ShoppingBag className="w-4 h-4 text-orange-500" />;
+    if (source === 'ai' || type.includes('alert')) return <AlertTriangle className="w-4 h-4 text-red-500" />;
+    if (source === 'asr' || source === 'system') return <PlayCircle className="w-4 h-4 text-purple-500" />;
+    return <Clock className="w-4 h-4 text-gray-500" />;
+  };
+
+  const formatOffset = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const filteredEvents = events.filter(e => filterSource === 'all' || e.source === filterSource);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+            <Clock className="h-6 w-6 text-primary" />
+            统一直播时间轴
+          </h1>
+          <p className="text-muted-foreground mt-2">
+            将业务指标、评论、话术、预警与 AI 动作映射到统一时间轴，精准归因“哪个动作导致了哪个结果”。
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <select 
+            className="border border-input rounded-md px-3 py-2 text-sm bg-background"
+            value={selectedSession}
+            onChange={(e) => setSelectedSession(e.target.value)}
+          >
+            {sessions.map(s => (
+              <option key={s.id} value={s.id}>
+                {s.room_name} ({format(new Date(s.start_time), 'MM-dd HH:mm')})
+              </option>
+            ))}
+            {sessions.length === 0 && <option value="">暂无直播场次</option>}
+          </select>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        <div className="lg:col-span-3">
+          <Card>
+            <CardHeader className="border-b bg-muted/20 pb-4">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Activity className="w-4 h-4" /> 关键节点与动作归因
+                </CardTitle>
+                <div className="flex items-center gap-2">
+                  <select 
+                    className="border border-input rounded-md px-2 py-1 text-xs bg-background"
+                    value={filterSource}
+                    onChange={e => setFilterSource(e.target.value)}
+                  >
+                    <option value="all">全部分类</option>
+                    <option value="chart">指标波动</option>
+                    <option value="comment">评论舆情</option>
+                    <option value="asr">主播话术</option>
+                    <option value="order">交易转化</option>
+                    <option value="ai">AI诊断预警</option>
+                  </select>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {loading ? (
+                <div className="flex items-center justify-center h-64">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                </div>
+              ) : filteredEvents.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
+                  <Search className="w-10 h-10 mb-4 opacity-20" />
+                  <p>该场次暂无时间轴事件记录</p>
+                </div>
+              ) : (
+                <div className="relative p-6">
+                  <div className="absolute left-[59px] top-6 bottom-6 w-px bg-border"></div>
+                  <div className="space-y-8">
+                    {filteredEvents.map((event, idx) => (
+                      <div key={event.id || idx} className="relative flex items-start gap-6 group">
+                        <div className="w-10 text-xs font-medium text-muted-foreground pt-1 shrink-0 text-right">
+                          {formatOffset(event.offset_seconds)}
+                        </div>
+                        <div className="absolute left-[34px] w-8 h-8 bg-background border-2 border-border rounded-full flex items-center justify-center z-10 group-hover:border-primary transition-colors">
+                          {getEventIcon(event.source, event.event_type)}
+                        </div>
+                        <div className="flex-1 bg-muted/30 rounded-lg border p-4 group-hover:border-primary/50 group-hover:shadow-sm transition-all ml-4">
+                          <div className="flex items-start justify-between gap-4 mb-2">
+                            <h4 className="font-semibold text-sm">{event.content}</h4>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {event.importance === 'high' && (
+                                <Badge variant="destructive" className="h-5 text-[10px] px-1.5">关键</Badge>
+                              )}
+                              <Badge variant="outline" className="h-5 text-[10px] px-1.5 capitalize">{event.source}</Badge>
+                            </div>
+                          </div>
+                          
+                          {/* 关联指标展示 */}
+                          {event.metrics && (
+                            <div className="mt-3 flex flex-wrap gap-3">
+                              {Object.entries(event.metrics).map(([k, v]) => (
+                                <div key={k} className="bg-background border rounded px-2 py-1 text-xs flex items-center gap-1.5">
+                                  <span className="text-muted-foreground">{k}:</span>
+                                  <span className="font-medium text-foreground">{String(v)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* 模拟的归因分析 */}
+                          {event.source === 'order' && event.event_type === 'payment_peak' && (
+                            <div className="mt-3 p-2 bg-green-500/10 border border-green-500/20 rounded-md text-xs text-green-700 flex items-start gap-1.5">
+                              <PlayCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                              <p><strong>AI 归因：</strong>此转化峰值大概率由 2 分钟前（{formatOffset(event.offset_seconds - 120)}）主播抛出的限时福利话术直接促成。</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">全局指标趋势</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="h-40 bg-muted/50 rounded-md flex items-center justify-center text-sm text-muted-foreground border border-dashed">
+                [在线人数趋势折线图区域]
+              </div>
+              <div className="h-40 bg-muted/50 rounded-md flex items-center justify-center text-sm text-muted-foreground border border-dashed mt-4">
+                [成交转化柱状图区域]
+              </div>
+            </CardContent>
+          </Card>
+          
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">时间轴数据源状态</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="flex items-center gap-2 text-muted-foreground"><Activity className="w-4 h-4"/> 实时指标数据</span>
+                <Badge variant="outline" className="bg-green-50 text-green-600 border-green-200">已同步</Badge>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="flex items-center gap-2 text-muted-foreground"><PlayCircle className="w-4 h-4"/> ASR 语音转写</span>
+                <Badge variant="outline" className="bg-green-50 text-green-600 border-green-200">已同步</Badge>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="flex items-center gap-2 text-muted-foreground"><MessageSquare className="w-4 h-4"/> 评论弹幕</span>
+                <Badge variant="outline" className="bg-green-50 text-green-600 border-green-200">已同步</Badge>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="flex items-center gap-2 text-muted-foreground"><ShoppingBag className="w-4 h-4"/> 订单流水</span>
+                <Badge variant="outline" className="bg-yellow-50 text-yellow-600 border-yellow-200">延迟 2min</Badge>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
