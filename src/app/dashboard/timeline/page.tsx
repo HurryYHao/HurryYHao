@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Clock, Activity, MessageSquare, ShoppingBag, AlertTriangle, PlayCircle, Search } from 'lucide-react';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
 
 interface TimelineEvent {
   id: number;
@@ -24,6 +25,7 @@ interface MinuteMetric {
   online_count: number;
   comment_count: number;
   order_count: number;
+  paid_count: number;
   paid_amount: number;
 }
 
@@ -222,11 +224,76 @@ export default function TimelinePage() {
               <CardTitle className="text-base">全局指标趋势</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="h-40 bg-muted/50 rounded-md flex items-center justify-center text-sm text-muted-foreground border border-dashed">
-                [在线人数趋势折线图区域]
+              {/* 在线人数趋势折线图 */}
+              <div className="mb-4">
+                <h4 className="text-sm font-medium mb-2 text-muted-foreground">在线人数趋势</h4>
+                <div className="h-40 bg-muted/30 rounded-md border">
+                  {metrics.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={metrics.slice(0, 60).map((m, i) => ({
+                        minute: m.minute_index,
+                        online: m.online_count || 0
+                      }))}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                        <XAxis 
+                          dataKey="minute" 
+                          tick={{ fontSize: 10 }} 
+                          tickFormatter={(v) => `${v}分`}
+                        />
+                        <YAxis tick={{ fontSize: 10 }} />
+                        <Tooltip 
+                          formatter={(value: number) => [`${value}人`, '在线人数']}
+                          labelFormatter={(label) => `第${label}分钟`}
+                        />
+                        <Line 
+                          type="monotone" 
+                          dataKey="online" 
+                          stroke="hsl(var(--primary))" 
+                          strokeWidth={2}
+                          dot={false}
+                          name="在线人数"
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+                      暂无数据
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="h-40 bg-muted/50 rounded-md flex items-center justify-center text-sm text-muted-foreground border border-dashed mt-4">
-                [成交转化柱状图区域]
+              
+              {/* 成交转化柱状图 */}
+              <div>
+                <h4 className="text-sm font-medium mb-2 text-muted-foreground">成交转化（每10分钟聚合）</h4>
+                <div className="h-40 bg-muted/30 rounded-md border">
+                  {metrics.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={Array.from({ length: Math.ceil(metrics.length / 10) }, (_, i) => {
+                        const slice = metrics.slice(i * 10, (i + 1) * 10);
+                        const orders = slice.reduce((sum, m) => sum + (m.order_count || 0), 0);
+                        const paid = slice.reduce((sum, m) => sum + (m.paid_count || 0), 0);
+                        return {
+                          period: `${i * 10}-${(i + 1) * 10}分`,
+                          orders,
+                          paid
+                        };
+                      }).slice(0, 10)}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                        <XAxis tick={{ fontSize: 9 }} dataKey="period" />
+                        <YAxis tick={{ fontSize: 10 }} />
+                        <Tooltip />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <Bar dataKey="orders" fill="hsl(var(--chart-1))" name="下单" />
+                        <Bar dataKey="paid" fill="hsl(var(--chart-2))" name="支付" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+                      暂无数据
+                    </div>
+                  )}
+                </div>
               </div>
             </CardContent>
           </Card>

@@ -8,9 +8,6 @@ const config: Config = {
     './src/app/**/*.{js,ts,jsx,tsx,mdx}',
   ],
   
-  // 明确指定项目根目录（避免根目录/package.json干扰）
-  root: '/workspace/projects',
-  
   theme: {
     extend: {},
   },

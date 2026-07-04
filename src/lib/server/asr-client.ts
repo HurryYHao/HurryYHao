@@ -33,6 +33,13 @@ export class ASRClient {
   }
 
   /**
+   * 检查客户端是否已初始化
+   */
+  isInitialized(): boolean {
+    return !!this.client;
+  }
+
+  /**
    * 转录音频文件
    * @param filePath 音频文件路径
    * @param language 语言 (可选，默认 'zh' 中文)

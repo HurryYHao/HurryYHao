@@ -8,7 +8,7 @@ export async function GET() {
     const hasConfig = !!CONFIG.tencentCloud.secretId && !!CONFIG.tencentCloud.secretKey;
     
     // 检查客户端是否初始化成功
-    const clientInitialized = !!asrClient.client;
+    const clientInitialized = asrClient.isInitialized();
     
     return NextResponse.json({
       success: true,
