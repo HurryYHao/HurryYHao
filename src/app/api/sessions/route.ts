@@ -27,17 +27,6 @@ export async function GET(request: NextRequest) {
 
     if (error) throw new Error(`查询会话列表失败: ${error.message}`);
 
-    // 支持两种格式：兼容旧格式（直接 data 数组）和新格式（data.sessions）
-    // 检查请求是否来自需要旧格式的地方
-    const referer = request.headers.get('referer') || '';
-    const needsLegacyFormat = referer.includes('/timeline') || referer.includes('/products') || referer.includes('/reports');
-    
-    if (needsLegacyFormat) {
-      return NextResponse.json({
-        data: data || []
-      });
-    }
-
     return NextResponse.json({
       success: true,
       data: {
