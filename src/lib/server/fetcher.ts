@@ -421,6 +421,40 @@ export async function fetchAllSnapshotData(
 
   if (error) throw new Error(`写入快照数据失败: ${error.message}`);
 
+  // 写入商品明细表（从orderDetails提取）
+  if (orderDetails.records && orderDetails.records.length > 0) {
+    const goodsMetrics = orderDetails.records.map((order: any) => {
+      const clickCount = Number(order.clickCount || order.click_count || 0);
+      const orderCount = Number(order.orderCount || order.order_count || 0);
+      const paidCount = Number(order.paidCount || order.paid_count || 0);
+      const unpaidCount = Number(order.unpaidCount || order.unpaid_count || 0);
+      const payAmount = Number(order.payAmount || order.pay_amount || 0);
+      
+      return {
+        session_id: sessionId,
+        goods_id: String(order.goodsId || order.goods_id || ''),
+        goods_name: String(order.goodsName || order.goods_name || ''),
+        click_count: clickCount,
+        order_count: orderCount,
+        paid_count: paidCount,
+        unpaid_count: unpaidCount,
+        pay_amount: payAmount,
+        click_to_order_rate: clickCount > 0 ? (orderCount / clickCount) * 100 : 0,
+        order_to_pay_rate: orderCount > 0 ? (paidCount / orderCount) * 100 : 0,
+        click_to_pay_rate: clickCount > 0 ? (paidCount / clickCount) * 100 : 0,
+        created_at: new Date().toISOString(),
+      };
+    });
+
+    const { error: goodsError } = await client.from('live_goods_metrics').insert(goodsMetrics);
+    if (goodsError) {
+      console.error('[Fetcher] 写入商品明细失败:', goodsError.message);
+      // 不抛出错误，允许继续执行
+    } else {
+      console.info(`[Fetcher] 写入 ${goodsMetrics.length} 条商品明细数据`);
+    }
+  }
+
   console.info(`[Fetcher] 快照 #${seq} 写入成功: ${audienceComments.length}条评论, ${orderDetails.records.length}条订单`);
 }
 
