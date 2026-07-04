@@ -125,8 +125,10 @@ const ANALYSIS_FRAMEWORK = `# 直播数据分析框架
 export function extractAnchorName(roomName: string): string {
   if (!roomName || typeof roomName !== 'string') return '未知主播';
 
-  // 优先匹配"XX老师"
-  const teacherMatch = roomName.match(/([\u4e00-\u9fa5]{1,4}老师)/);
+  // 优先匹配"XX老师"，但排除日期标记（号、日、月、年）
+  // 先去掉日期部分（如"6月30号"、"7月1日"），再匹配老师
+  const cleanedName = roomName.replace(/\d+月\d+[号日]|[0-9]{4}年/, '').trim();
+  const teacherMatch = cleanedName.match(/([\u4e00-\u9fa5]{1,4}老师)/);
   if (teacherMatch) return teacherMatch[1];
 
   // 匹配"XX主播"
@@ -1184,7 +1186,7 @@ async function saveAnalysisTimelineEvents(
   }
 }
 
-async function upsertAnchorProfile(anchorName: string): Promise<void> {
+export async function upsertAnchorProfile(anchorName: string): Promise<void> {
   if (!anchorName || anchorName === '未知主播') return;
 
   const client = getSupabaseClient();
