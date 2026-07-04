@@ -46,17 +46,17 @@ export const CONFIG = {
     leepow: 'https://api.leepow.com',
   },
 
-  // AI 配置
+  // AI 配置 - 现在统一使用 coze-coding-dev-sdk
   ai: {
-    // 默认使用的 AI 提供商
-    defaultProvider: process.env.DEFAULT_AI_PROVIDER || AI_PROVIDERS.ZHENJING,
-    // 帧境 API 配置
+    // 默认使用的 AI 提供商（只有COZE）
+    defaultProvider: AI_PROVIDERS.COZE,
+    // 帧境 API 配置（废弃，保留配置项以便未来扩展）
     zhenjing: {
       apiKey: process.env.ZHENJING_API_KEY || '',
       baseUrl: process.env.ZHENJING_BASE_URL || 'https://zhenjing.top/v1',
       model: process.env.ZHENJING_MODEL || 'gpt-4o-mini',
     },
-    // Coze API 配置
+    // Coze API 配置（通过 coze-coding-dev-sdk 自动管理）
     coze: {
       model: 'doubao-seed-2-0-pro-260215',
     },

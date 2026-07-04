@@ -1,276 +1,136 @@
-import { CONFIG, AI_PROVIDERS, AVAILABLE_MODELS } from './config';
+// LLM客户端 - 使用 coze-coding-dev-sdk
 import { LLMClient as CozeLLMClient, Config as CozeConfig } from 'coze-coding-dev-sdk';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
 
+// 使用SDK的Message类型定义
 type Message = {
   role: 'user' | 'assistant' | 'system';
-  content: string | Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string; detail?: string } }>;
+  content: string | Array<{ type: 'text' | 'image_url' | 'video_url'; text?: string; image_url?: { url: string; detail?: 'high' | 'low' }; video_url?: { url: string; fps?: number | null } }>;
 };
 
 type InvokeOptions = {
   model?: string;
   temperature?: number;
-  maxTokens?: number;
-  stream?: boolean;
+  thinking?: 'enabled' | 'disabled';
 };
 
-type AIConfig = typeof CONFIG.ai;
-type CozeInvokeResponse = { content?: string };
-type StreamChunk = { content?: string | { toString(): string } };
+// 支持的模型列表
+const AVAILABLE_MODELS = [
+  'doubao-seed-2-0-pro-260215',
+  'doubao-seed-2-0-lite-260215',
+  'doubao-seed-2-0-mini-260215',
+  'doubao-seed-1-8-251228',
+  'deepseek-v3-2-251201',
+  'kimi-k2-5-260127',
+  'glm-5-0-260211',
+  'glm-5-turbo-260316',
+  'glm-4-7-251222',
+  'minimax-m2-5-260212',
+  'minimax-m2-7-260318',
+  'qwen-3-5-plus-260215',
+] as const;
 
+/**
+ * LLM客户端 - 基于 coze-coding-dev-sdk
+ */
 class UniversalLLMClient {
-  private provider: string;
-  private config: AIConfig;
+  private client: CozeLLMClient;
   private currentModel?: string;
 
-  constructor(provider?: string) {
-    this.provider = provider || CONFIG.ai.defaultProvider;
-    this.config = CONFIG.ai;
+  constructor() {
+    const config = new CozeConfig();
+    this.client = new CozeLLMClient(config);
   }
 
   async initFromDb() {
-    try {
-      const client = getSupabaseClient();
-      const { data } = await client
-        .from('system_config')
-        .select('config_value')
-        .eq('config_key', 'ai_settings')
-        .maybeSingle();
-
-      if (data?.config_value) {
-        const settings = JSON.parse(data.config_value);
-        if (settings.provider) this.provider = settings.provider;
-        // 暂时禁用 DB 配置 model，避免类型问题
-      }
-    } catch (e) {
-      console.warn('Failed to load AI settings from DB', e);
-    }
+    // 从数据库加载配置的功能暂时保留，但不再使用
+    // coze-coding-dev-sdk的配置由环境变量自动管理
     return this;
   }
 
-  // 允许强制指定本次调用的 provider 和 model
-  setForceModel(provider: string, model: string) {
-    this.provider = provider;
+  /**
+   * 强制指定模型
+   */
+  setForceModel(_provider: string, model: string) {
     this.currentModel = model;
     return this;
   }
 
+  /**
+   * 调用LLM（非流式）
+   */
   async invoke(messages: Message[], options: InvokeOptions = {}): Promise<string> {
-    switch (this.provider) {
-      case AI_PROVIDERS.ZHENJING:
-        return this.invokeZhenjing(messages, options);
-      case AI_PROVIDERS.COZE:
-        return this.invokeCoze(messages, options);
-      case AI_PROVIDERS.OPENAI:
-        return this.invokeOpenAI(messages, options);
-      default:
-        throw new Error(`Unsupported AI provider: ${this.provider}`);
-    }
-  }
+    const model = this.currentModel || options.model || 'doubao-seed-2-0-pro-260215';
+    const temperature = options.temperature ?? 0.7;
 
-  private async invokeZhenjing(messages: Message[], options: InvokeOptions = {}): Promise<string> {
-    const { apiKey, baseUrl, model: defaultModel } = this.config.zhenjing;
-
-    if (!apiKey) {
-      throw new Error('Zhenjing API key is not configured');
-    }
-
-    const model = this.currentModel || options.model || defaultModel;
-    const url = `${baseUrl}/chat/completions`;
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: options.temperature || 0.7,
-        max_tokens: options.maxTokens,
-        stream: options.stream || false,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      throw new Error(`Zhenjing API error: ${response.status} - ${errorText}`);
-    }
-
-    const data = await response.json();
-    return data.choices[0]?.message?.content || '';
-  }
-
-  private async invokeCoze(messages: Message[], options: InvokeOptions = {}): Promise<string> {
     try {
-      const config = new CozeConfig();
-      const client = new CozeLLMClient(config);
-      // @ts-expect-error - 忽略 Coze SDK 的类型问题
-      const response = await client.chat(messages as unknown as never[], {
-        model: this.currentModel || options.model || this.config.coze.model,
-        temperature: options.temperature || 0.7,
-      }) as CozeInvokeResponse;
+      console.log(`[LLM] 调用模型: ${model}, temperature: ${temperature}`);
+      
+      const response = await this.client.invoke(messages, {
+        model,
+        temperature,
+        thinking: options.thinking || 'disabled',
+      });
 
-      return response.content?.trim() || '';
+      if (!response || !response.content) {
+        throw new Error('返回了空响应');
+      }
+
+      console.log(`[LLM] 成功返回，长度: ${response.content.length}`);
+      return response.content;
     } catch (e) {
-      console.error('[LLM] Coze 调用失败:', e);
-      throw new Error('Coze 调用失败');
+      console.error('[LLM] 调用失败:', e);
+      throw new Error(`LLM调用失败: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
-  private async invokeOpenAI(messages: Message[], options: InvokeOptions = {}): Promise<string> {
-    const apiKey = process.env.OPENAI_API_KEY;
-    const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-    const model = this.currentModel || options.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
-
-    if (!apiKey) {
-      throw new Error('OpenAI API key is not configured');
-    }
-
-    const url = `${baseUrl}/chat/completions`;
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: options.temperature || 0.7,
-        max_tokens: options.maxTokens,
-        stream: options.stream || false,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
-    }
-
-    const data = await response.json();
-    return data.choices[0]?.message?.content || '';
-  }
-
-  getAvailableModels(): readonly string[] {
-    return AVAILABLE_MODELS[this.provider as keyof typeof AVAILABLE_MODELS] || [];
-  }
-
-  static getProviders(): string[] {
-    return Object.values(AI_PROVIDERS);
-  }
-
+  /**
+   * 调用LLM（流式）
+   */
   async *stream(messages: Message[], options: InvokeOptions = {}): AsyncGenerator<{ content: string }> {
-    switch (this.provider) {
-      case AI_PROVIDERS.ZHENJING:
-        yield* this.streamZhenjing(messages, options);
-        break;
-      case AI_PROVIDERS.COZE:
-        yield* this.streamCoze(messages, options);
-        break;
-      case AI_PROVIDERS.OPENAI:
-        yield* this.streamOpenAI(messages, options);
-        break;
-      default:
-        throw new Error(`Unsupported AI provider: ${this.provider}`);
-    }
-  }
+    const model = this.currentModel || options.model || 'doubao-seed-2-0-pro-260215';
+    const temperature = options.temperature ?? 0.7;
 
-  private async *streamOpenAICompatible(
-    url: string,
-    apiKey: string,
-    model: string,
-    messages: Message[],
-    options: InvokeOptions = {}
-  ): AsyncGenerator<{ content: string }> {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
+    try {
+      console.log(`[LLM] 流式调用模型: ${model}, temperature: ${temperature}`);
+      
+      const streamGenerator = this.client.stream(messages, {
         model,
-        messages,
-        temperature: options.temperature || 0.7,
-        max_tokens: options.maxTokens,
-        stream: true,
-      }),
-    });
+        temperature,
+        thinking: options.thinking || 'disabled',
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      throw new Error(`API error: ${response.status} - ${errorText}`);
-    }
-
-    if (!response.body) {
-      throw new Error('Response body is null');
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder('utf-8');
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (line.trim() === '') continue;
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          if (data === '[DONE]') continue;
-          try {
-            const parsed = JSON.parse(data);
-            const content = parsed.choices[0]?.delta?.content;
-            if (content) {
-              yield { content };
-            }
-          } catch {
-            // Ignore parse errors
-          }
+      for await (const chunk of streamGenerator) {
+        if (chunk && chunk.content) {
+          yield { content: chunk.content.toString() };
         }
       }
+
+      console.log(`[LLM] 流式调用完成`);
+    } catch (e) {
+      console.error('[LLM] 流式调用失败:', e);
+      throw new Error(`LLM流式调用失败: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
-  private async *streamZhenjing(messages: Message[], options: InvokeOptions = {}): AsyncGenerator<{ content: string }> {
-    const { apiKey, baseUrl, model: defaultModel } = this.config.zhenjing;
-    if (!apiKey) throw new Error('Zhenjing API key is not configured');
-    const model = this.currentModel || options.model || defaultModel;
-    const url = `${baseUrl}/chat/completions`;
-    yield* this.streamOpenAICompatible(url, apiKey, model, messages, options);
+  /**
+   * 获取可用模型列表
+   */
+  getAvailableModels(): readonly string[] {
+    return AVAILABLE_MODELS;
   }
 
-  private async *streamOpenAI(messages: Message[], options: InvokeOptions = {}): AsyncGenerator<{ content: string }> {
-    const apiKey = process.env.OPENAI_API_KEY || '';
-    const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-    const model = this.currentModel || options.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
-    if (!apiKey) throw new Error('OpenAI API key is not configured');
-    const url = `${baseUrl}/chat/completions`;
-    yield* this.streamOpenAICompatible(url, apiKey, model, messages, options);
-  }
-
-  private async *streamCoze(messages: Message[], options: InvokeOptions = {}): AsyncGenerator<{ content: string }> {
-    const config = new CozeConfig();
-    const client = new CozeLLMClient(config);
-    const stream = await client.stream(messages as unknown as never[], {
-      model: this.currentModel || options.model || this.config.coze.model,
-      temperature: options.temperature || 0.7,
-    }) as AsyncIterable<StreamChunk>;
-    for await (const chunk of stream) {
-      if (chunk.content) {
-        yield { content: chunk.content.toString() };
-      }
-    }
+  /**
+   * 获取支持的provider列表（现在只有一个）
+   */
+  static getProviders(): string[] {
+    return ['coze'];
   }
 }
+
+// 导出AI_PROVIDERS兼容性常量（废弃，只保留COZE）
+const AI_PROVIDERS = {
+  COZE: 'coze',
+};
 
 export { UniversalLLMClient, AI_PROVIDERS, AVAILABLE_MODELS };
 export type { Message, InvokeOptions };

@@ -915,14 +915,14 @@ async function callLLMAnalysis(prompt: string): Promise<string> {
   console.log(prompt);
   console.log('='.repeat(100));
 
-  // 定义多模型并发策略：采用帧境的 deepseek-chat 和豆包模型，以及备用的 gpt-4o-mini
+  // 定义模型调用策略：使用 coze-coding-dev-sdk 支持的模型
   const modelsToTry = [
-    { provider: AI_PROVIDERS.ZHENJING, model: 'deepseek-chat' },
-    { provider: AI_PROVIDERS.ZHENJING, model: 'doubao-seed-2-0-pro-260215' },
-    { provider: AI_PROVIDERS.OPENAI, model: 'gpt-4o-mini' }
+    { model: 'doubao-seed-2-0-pro-260215', name: 'Doubao Pro' },
+    { model: 'doubao-seed-2-0-lite-260215', name: 'Doubao Lite' },
+    { model: 'doubao-seed-1-8-251228', name: 'Doubao 1.8' }
   ];
 
-  console.log(`[Analyzer] 启动多模型并发分析, 参与模型: ${modelsToTry.map(m => m.model).join(', ')}`);
+  console.log(`[Analyzer] 启动多模型并发分析, 参与模型: ${modelsToTry.map(m => m.name).join(', ')}`);
 
   try {
     // 构造多个独立的分析任务
@@ -932,8 +932,8 @@ async function callLLMAnalysis(prompt: string): Promise<string> {
         const modelClient = new UniversalLLMClient();
         await modelClient.initFromDb();
         
-        // 使用 setForceModel 强制指定使用特定 provider 和 model
-        modelClient.setForceModel(config.provider, config.model);
+        // 使用 setForceModel 指定模型（provider已废弃，只传空字符串）
+        modelClient.setForceModel('', config.model);
         
         const response = await modelClient.invoke(messages as any, {
           temperature: 0.4,
@@ -942,10 +942,10 @@ async function callLLMAnalysis(prompt: string): Promise<string> {
         if (!response || response.trim().length === 0) {
           throw new Error('返回了空响应');
         }
-        console.log(`[Analyzer] 并发任务成功返回: ${config.provider}/${config.model}`);
+        console.log(`[Analyzer] 并发任务成功返回: ${config.name}`);
         return response;
       } catch (err) {
-        console.warn(`[Analyzer] 并发任务失败 (${config.provider}/${config.model}):`, err instanceof Error ? err.message : err);
+        console.warn(`[Analyzer] 并发任务失败 (${config.name}):`, err instanceof Error ? err.message : err);
         throw err;
       }
     });
