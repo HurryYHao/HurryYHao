@@ -85,23 +85,38 @@ export default function ReportsPage() {
     try {
       const res = await fetch('/api/sessions?page=1&pageSize=50');
       const json = await res.json();
+      console.log('[Reports] API返回:', json.success, 'sessions数量:', json.data?.sessions?.length);
       if (json.success) {
         const sessionList: Session[] = json.data.sessions || [];
         setSessions(sessionList);
-        // 自动选择第一个主播和第一个会话
-        if (sessionList.length > 0) {
-          const firstAnchor = sessionList[0].anchor_name || '未知主播';
-          setSelectedAnchor(firstAnchor);
-          // 默认选择第一个会话并加载报告
-          setSelectedSession(sessionList[0]);
-          fetchReports(sessionList[0].id);
-        }
       }
-    } catch { toast.error('获取会话失败'); }
+    } catch (err) { 
+      console.error('[Reports] 获取会话失败:', err);
+      toast.error('获取会话失败'); 
+    }
     finally { setLoading(false); }
   }, []);
 
   useEffect(() => { fetchSessions(); }, [fetchSessions]);
+
+  // 使用单独的effect设置默认选择
+  useEffect(() => {
+    if (sessions.length > 0 && !selectedAnchor) {
+      const firstAnchor = sessions[0].anchor_name || '未知主播';
+      console.log('[Reports] 自动设置anchor:', firstAnchor);
+      setSelectedAnchor(firstAnchor);
+      setSelectedSession(sessions[0]);
+      // 使用异步调用避免依赖循环
+      fetch(`/api/reports/${sessions[0].id}`)
+        .then(res => res.json())
+        .then(json => {
+          if (json.success) {
+            setReports(json.data.reports || []);
+          }
+        })
+        .catch(err => console.error('[Reports] 自动加载报告失败:', err));
+    }
+  }, [sessions, selectedAnchor]);
 
   // 按主播分组
   const anchorGroups = sessions.reduce<Record<string, Session[]>>((acc, s) => {
