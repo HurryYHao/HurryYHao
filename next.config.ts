@@ -3,12 +3,6 @@ import type { NextConfig } from 'next';
 const nextConfig: NextConfig = {
   // outputFileTracingRoot: path.resolve(__dirname, '../../'),  // Uncomment and add 'import path from "path"' if needed
   /* config options here */
-  allowedDevOrigins: ['*.dev.coze.site'],
-  
-  // 明确指定Turbopack根目录，消除lockfile警告
-  turbopack: {
-    root: __dirname,
-  },
   
   images: {
     remotePatterns: [
