@@ -132,8 +132,8 @@ export default function TimelinePage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        <div className="lg:col-span-3">
+      <div className="flex gap-6">
+        <div className="flex-1 min-w-0">
           <Card>
             <CardHeader className="border-b bg-muted/20 pb-4">
               <div className="flex items-center justify-between">
@@ -167,6 +167,7 @@ export default function TimelinePage() {
                   <p>该场次暂无时间轴事件记录</p>
                 </div>
               ) : (
+                <div className="max-h-[calc(100vh-320px)] overflow-y-auto">
                 <div className="relative p-6">
                   <div className="absolute left-[59px] top-6 bottom-6 w-px bg-border"></div>
                   <div className="space-y-8">
@@ -213,37 +214,39 @@ export default function TimelinePage() {
                     ))}
                   </div>
                 </div>
+                </div>
               )}
             </CardContent>
           </Card>
         </div>
 
-        <div className="space-y-6">
+        <div className="space-y-6 w-[420px] shrink-0">
           <Card>
             <CardHeader>
               <CardTitle className="text-base">全局指标趋势</CardTitle>
             </CardHeader>
             <CardContent>
               {/* 在线人数趋势折线图 */}
-              <div className="mb-4">
+              <div className="mb-6">
                 <h4 className="text-sm font-medium mb-2 text-muted-foreground">在线人数趋势</h4>
-                <div className="h-40 bg-muted/30 rounded-md border">
+                <div className="h-56 bg-muted/30 rounded-md border p-2">
                   {metrics.length > 0 ? (
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={metrics.slice(0, 60).map((m, i) => ({
+                      <LineChart data={metrics.slice(0, 120).map((m) => ({
                         minute: m.minute_index,
                         online: m.online_count || 0
                       }))}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                        <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                         <XAxis 
                           dataKey="minute" 
                           tick={{ fontSize: 10 }} 
-                          tickFormatter={(v) => `${v}分`}
+                          tickFormatter={(v: number) => `${v}分`}
+                          interval="preserveStartEnd"
                         />
-                        <YAxis tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} width={40} />
                         <Tooltip 
                           formatter={(value: number) => [`${value}人`, '在线人数']}
-                          labelFormatter={(label) => `第${label}分钟`}
+                          labelFormatter={(label: number) => `第${label}分钟`}
                         />
                         <Line 
                           type="monotone" 
@@ -266,7 +269,7 @@ export default function TimelinePage() {
               {/* 成交转化柱状图 */}
               <div>
                 <h4 className="text-sm font-medium mb-2 text-muted-foreground">成交转化（每10分钟聚合）</h4>
-                <div className="h-40 bg-muted/30 rounded-md border">
+                <div className="h-56 bg-muted/30 rounded-md border p-2">
                   {metrics.length > 0 ? (
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={Array.from({ length: Math.ceil(metrics.length / 10) }, (_, i) => {
@@ -278,10 +281,10 @@ export default function TimelinePage() {
                           orders,
                           paid
                         };
-                      }).slice(0, 10)}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                      }).slice(0, 12)}>
+                        <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                         <XAxis tick={{ fontSize: 9 }} dataKey="period" />
-                        <YAxis tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} width={40} />
                         <Tooltip />
                         <Legend wrapperStyle={{ fontSize: 10 }} />
                         <Bar dataKey="orders" fill="hsl(var(--chart-1))" name="下单" />

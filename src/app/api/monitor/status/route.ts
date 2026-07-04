@@ -1,7 +1,7 @@
 // GET /api/monitor/status - 获取监控状态概览（只读）
 // POST /api/monitor/status - 手动触发状态轮询
 import { NextRequest, NextResponse } from 'next/server';
-import { getNumberAnalysis, getLiveList, pollLiveStatus, getRecordingStatus, checkAndRunScheduledAnalysis, type LiveRoom } from '@/lib/server/monitor';
+import { getNumberAnalysis, getLiveList, pollLiveStatus, getRecordingStatus, checkAndRunScheduledAnalysis, checkAndRunRealtimeAlerts, type LiveRoom } from '@/lib/server/monitor';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { fetchAnalysis, fetchOrderAnalysis, fetchChartData } from '@/lib/server/fetcher';
 import { getLiveSpaceId } from '@/lib/server/auth';
@@ -142,6 +142,17 @@ export async function GET(request: NextRequest) {
       console.error('[MonitorStatus] 获取录制状态异常:', err instanceof Error ? err.message : err);
     }
 
+    // ===== 6. 1分钟实时预警检查（非阻塞） =====
+    let realtimeAlertResults: Array<{ sessionId: number; alertCount: number }> = [];
+    try {
+      realtimeAlertResults = await checkAndRunRealtimeAlerts();
+      if (realtimeAlertResults.length > 0) {
+        console.log(`[MonitorStatus] 实时预警检查完成，新增预警:`, realtimeAlertResults);
+      }
+    } catch (err) {
+      console.error('[MonitorStatus] 实时预警检查异常:', err instanceof Error ? err.message : err);
+    }
+
     return NextResponse.json({
       success: true,
       data: {
@@ -165,6 +176,7 @@ export async function GET(request: NextRequest) {
         liveSummary,
         recordingStatus,
         autoAnalysisTriggered: [],
+        realtimeAlertResults,
       },
     });
   } catch (err) {

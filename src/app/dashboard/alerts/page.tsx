@@ -1,11 +1,17 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { AlertCircle, AlertTriangle, CheckCircle, Clock, Search, Filter } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle, Clock, Search, Filter, RefreshCw, Radio } from 'lucide-react';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
+
+interface LiveSession {
+  room_name: string;
+  anchor_name: string;
+  start_time: string;
+}
 
 interface Alert {
   id: number;
@@ -19,23 +25,18 @@ interface Alert {
   status: 'open' | 'resolved' | 'auto_resolved';
   triggered_at: string;
   resolved_at: string | null;
-  live_sessions?: {
-    room_name: string;
-    anchor_name: string;
-  };
+  offset_minutes: number | null;
+  live_sessions?: LiveSession;
 }
 
 export default function AlertsPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
-  useEffect(() => {
-    fetchAlerts();
-  }, [filterStatus]);
-
-  const fetchAlerts = async () => {
-    setLoading(true);
+  const fetchAlerts = useCallback(async () => {
     try {
       const url = new URL('/api/alerts', window.location.origin);
       if (filterStatus !== 'all') {
@@ -50,8 +51,20 @@ export default function AlertsPage() {
       console.error('Failed to fetch alerts:', error);
     } finally {
       setLoading(false);
+      setLastRefresh(new Date());
     }
-  };
+  }, [filterStatus]);
+
+  useEffect(() => {
+    fetchAlerts();
+  }, [fetchAlerts]);
+
+  // 自动刷新 - 每60秒
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const interval = setInterval(fetchAlerts, 60000);
+    return () => clearInterval(interval);
+  }, [autoRefresh, fetchAlerts]);
 
   const handleResolve = async (id: number) => {
     try {
@@ -86,13 +99,92 @@ export default function AlertsPage() {
     }
   };
 
+  const formatLiveTime = (alert: Alert) => {
+    // 优先显示直播相对时间
+    if (alert.offset_minutes !== null && alert.offset_minutes !== undefined) {
+      const hours = Math.floor(alert.offset_minutes / 60);
+      const mins = alert.offset_minutes % 60;
+      if (hours > 0) {
+        return `直播第 ${hours}小时${mins > 0 ? mins + '分' : ''}`;
+      }
+      return `直播第 ${mins} 分钟`;
+    }
+    // 回退到绝对时间
+    try {
+      return format(new Date(alert.triggered_at), 'MM-dd HH:mm:ss', { locale: zhCN });
+    } catch {
+      return alert.triggered_at;
+    }
+  };
+
+  const openAlerts = alerts.filter(a => a.status === 'open');
+  const highAlerts = alerts.filter(a => a.severity === 'high' || a.severity === 'critical');
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">实时预警中心</h1>
-        <p className="text-muted-foreground mt-2">
-          监控直播过程中的异常指标和风险点，并提供实时纠偏建议。
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+            实时预警中心
+            {autoRefresh && (
+              <span className="flex items-center gap-1 text-xs font-normal text-primary">
+                <Radio className="w-3 h-3 animate-pulse" /> 实时监控中
+              </span>
+            )}
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            监控直播过程中的异常指标和风险点，每分钟自动分析
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => { fetchAlerts(); }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-input rounded-md hover:bg-muted/50 transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            刷新
+          </button>
+          <span className="text-xs text-muted-foreground">
+            上次更新: {format(lastRefresh, 'HH:mm:ss')}
+          </span>
+        </div>
+      </div>
+
+      {/* 概览统计 */}
+      <div className="grid grid-cols-3 gap-4">
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">待处理预警</p>
+                <p className="text-2xl font-bold">{openAlerts.length}</p>
+              </div>
+              <AlertCircle className="w-8 h-8 text-red-500/30" />
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">高风险预警</p>
+                <p className="text-2xl font-bold">{highAlerts.length}</p>
+              </div>
+              <AlertTriangle className="w-8 h-8 text-orange-500/30" />
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">今日总预警</p>
+                <p className="text-2xl font-bold">{alerts.length}</p>
+              </div>
+              <CheckCircle className="w-8 h-8 text-green-500/30" />
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       <div className="flex items-center gap-4">
@@ -101,13 +193,13 @@ export default function AlertsPage() {
             onClick={() => setFilterStatus('all')}
             className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${filterStatus === 'all' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
           >
-            全部
+            全部 ({alerts.length})
           </button>
           <button
             onClick={() => setFilterStatus('open')}
             className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${filterStatus === 'open' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
           >
-            待处理
+            待处理 ({openAlerts.length})
           </button>
           <button
             onClick={() => setFilterStatus('resolved')}
@@ -116,6 +208,15 @@ export default function AlertsPage() {
             已解决
           </button>
         </div>
+        <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
+          <input
+            type="checkbox"
+            checked={autoRefresh}
+            onChange={(e) => setAutoRefresh(e.target.checked)}
+            className="rounded border-input"
+          />
+          自动刷新（60秒）
+        </label>
       </div>
 
       {loading ? (
@@ -127,6 +228,7 @@ export default function AlertsPage() {
           <CardContent className="flex flex-col items-center justify-center h-64 text-muted-foreground">
             <CheckCircle className="w-12 h-12 mb-4 text-green-500/50" />
             <p>当前没有符合条件的预警记录</p>
+            <p className="text-xs mt-1">系统每分钟自动分析直播数据并生成预警</p>
           </CardContent>
         </Card>
       ) : (
@@ -144,7 +246,7 @@ export default function AlertsPage() {
                         <div className="flex items-center gap-2 mb-1">
                           <h3 className="font-semibold text-lg">{alert.title}</h3>
                           <Badge variant="outline" className={getSeverityColor(alert.severity)}>
-                            {alert.severity === 'critical' ? '严重' : alert.severity === 'high' ? '高风险' : '中风险'}
+                            {alert.severity === 'critical' ? '严重' : alert.severity === 'high' ? '高风险' : alert.severity === 'medium' ? '中风险' : '低风险'}
                           </Badge>
                           {alert.status !== 'open' && (
                             <Badge variant="outline" className="bg-green-500/10 text-green-600 border-green-200">
@@ -153,14 +255,17 @@ export default function AlertsPage() {
                           )}
                         </div>
                         <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                          <span className="flex items-center gap-1">
+                          <span className="flex items-center gap-1 font-medium text-foreground">
                             <Clock className="w-3.5 h-3.5" />
-                            {format(new Date(alert.triggered_at), 'MM-dd HH:mm:ss', { locale: zhCN })}
+                            {formatLiveTime(alert)}
+                          </span>
+                          <span className="text-xs">
+                            ({format(new Date(alert.triggered_at), 'MM-dd HH:mm:ss', { locale: zhCN })})
                           </span>
                           {alert.live_sessions && (
                             <span className="flex items-center gap-1">
-                              直播间: {alert.live_sessions.room_name} 
-                              {alert.live_sessions.anchor_name && ` (${alert.live_sessions.anchor_name})`}
+                              {alert.live_sessions.room_name}
+                              {alert.live_sessions.anchor_name && ` - ${alert.live_sessions.anchor_name}`}
                             </span>
                           )}
                         </div>
@@ -190,9 +295,6 @@ export default function AlertsPage() {
                       标记为已处理
                     </button>
                   )}
-                  <button className="w-full px-4 py-2 bg-muted text-muted-foreground text-sm font-medium rounded-md hover:bg-muted/80 transition-colors">
-                    查看详细数据
-                  </button>
                 </div>
               </div>
             </Card>

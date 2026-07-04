@@ -4,7 +4,7 @@ import { adminApiRequest, getLiveSpaceId } from './auth';
 import { ensureKnowledgeSeeded } from './knowledge-seed';
 import { CONFIG, LIVE_STATUS, SESSION_STATUS } from './config';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { fetchAllSnapshotData, getSessionSnapshots } from './fetcher';
+import { fetchAllSnapshotData, getSessionSnapshots, fetchAnalysis, fetchChartData, fetchNewoldData } from './fetcher';
 import { runAnalysis, extractAnchorName, analyzeProduct } from './analyzer';
 import { autoStartRecording, stopAudioRecording, isRecording, canAutoRestart, isStreamDead, resetRetryCount } from './recorder';
 import { globalQueue } from '@/worker/queue';
@@ -860,6 +860,247 @@ export async function getRecordingStatus(): Promise<Array<{
       recordingDuration,
     };
   });
+}
+
+// ==================== 1分钟实时预警检查 ====================
+
+/** 上次实时预警检查时间（per session） */
+const lastRealtimeCheck: Map<number, number> = new Map();
+/** 实时预警检查间隔（毫秒），默认1分钟 */
+const REALTIME_CHECK_INTERVAL_MS = 60 * 1000;
+
+/**
+ * 1分钟实时预警检查
+ * 挂载在 GET /api/monitor/status 上，每次前端30秒轮询时调用
+ * 
+ * 逻辑：遍历所有 RECORDING 状态的会话，
+ * 如果距离上次检查超过1分钟，则抓取最新实时数据，
+ * 使用轻量级AI模型分析异常，生成预警
+ */
+export async function checkAndRunRealtimeAlerts(): Promise<Array<{
+  sessionId: number;
+  alertCount: number;
+}>> {
+  const client = getSupabaseClient();
+  const triggered: Array<{ sessionId: number; alertCount: number }> = [];
+  const now = Date.now();
+
+  // 查询所有 RECORDING 状态的会话
+  const { data: recordingSessions, error } = await client
+    .from('live_sessions')
+    .select('id, room_id, room_name, start_time, live_space_id')
+    .eq('status', SESSION_STATUS.RECORDING);
+
+  if (error || !recordingSessions || recordingSessions.length === 0) {
+    return triggered;
+  }
+
+  for (const session of recordingSessions) {
+    const lastCheck = lastRealtimeCheck.get(session.id) || 0;
+    const elapsed = now - lastCheck;
+
+    if (elapsed < REALTIME_CHECK_INTERVAL_MS) continue;
+
+    // 更新检查时间
+    lastRealtimeCheck.set(session.id, now);
+
+    try {
+      console.log(`[RealtimeAlert] 检查session=${session.id}, room=${session.room_id}, 距上次检查=${Math.round(elapsed / 60000)}分钟`);
+
+      // 抓取最新实时数据
+      const roomId = session.room_id;
+      const liveSpaceId = session.live_space_id || '';
+
+      // 并行获取多个数据源
+      const [analysisData, chartData, newoldData] = await Promise.allSettled([
+        fetchAnalysis(roomId, liveSpaceId),
+        fetchChartData(roomId, liveSpaceId),
+        fetchNewoldData(roomId, liveSpaceId),
+      ]);
+
+      // 构建当前实时数据摘要
+      const analysis = analysisData.status === 'fulfilled' ? analysisData.value : {};
+      const chart = chartData.status === 'fulfilled' ? chartData.value : {};
+      const newold = newoldData.status === 'fulfilled' ? newoldData.value : {};
+
+      const currentData = {
+        viewers: Number(analysis.viewers || 0),
+        online: Number(analysis.online || 0),
+        comments: Number(analysis.comments || 0),
+        amount: Number(analysis.amount || 0),
+        newFans: Number(newold.newFans || 0),
+        oldFans: Number(newold.oldFans || 0),
+      };
+
+      // 获取最近的alerts，用于判断是否重复
+      const { data: recentAlerts } = await client
+        .from('live_alerts')
+        .select('alert_type, title')
+        .eq('session_id', session.id)
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+      const recentAlertTypes = new Set((recentAlerts || []).map((a: { alert_type: string; title: string }) => `${a.alert_type}:${a.title}`));
+
+      // 基于规则的实时预警检测
+      const newAlerts: Array<{
+        alertType: string;
+        severity: 'high' | 'medium' | 'low';
+        title: string;
+        description: string;
+      }> = [];
+
+      // 规则1: 在线人数骤降（超过30%）
+      const prevMetrics = await client
+        .from('live_metrics_minute')
+        .select('online_count')
+        .eq('session_id', session.id)
+        .order('minute_index', { ascending: false })
+        .limit(5);
+
+      if (prevMetrics.data && prevMetrics.data.length >= 3) {
+        const recentOnline = prevMetrics.data.map((m: { online_count: number }) => m.online_count);
+        const avgOnline = recentOnline.reduce((a: number, b: number) => a + b, 0) / recentOnline.length;
+        if (avgOnline > 0 && currentData.online < avgOnline * 0.7 && currentData.online > 0) {
+          const alertKey = `online_drop:在线人数骤降`;
+          if (!recentAlertTypes.has(alertKey)) {
+            newAlerts.push({
+              alertType: 'online_drop',
+              severity: 'high',
+              title: '在线人数骤降',
+              description: `在线人数从平均${Math.round(avgOnline)}人骤降至${currentData.online}人，降幅${Math.round((1 - currentData.online / avgOnline) * 100)}%，可能存在推流问题或内容吸引力下降`,
+            });
+          }
+        }
+      }
+
+      // 规则2: 互动率低（评论数相对在线人数过低）
+      if (currentData.online > 50 && currentData.comments < currentData.online * 0.05) {
+        const alertKey = `low_interaction:互动率偏低`;
+        if (!recentAlertTypes.has(alertKey)) {
+          newAlerts.push({
+            alertType: 'low_interaction',
+            severity: 'medium',
+            title: '互动率偏低',
+            description: `当前在线${currentData.online}人但评论互动仅${currentData.comments}条，互动率${(currentData.comments / currentData.online * 100).toFixed(1)}%，建议主播增加互动引导`,
+          });
+        }
+      }
+
+      // 规则3: 成交额停滞（长时间无新增成交）
+      const prevAmount = await client
+        .from('live_metrics_minute')
+        .select('paid_amount')
+        .eq('session_id', session.id)
+        .order('minute_index', { ascending: false })
+        .limit(10);
+
+      if (prevAmount.data && prevAmount.data.length >= 5) {
+        const amounts = prevAmount.data.map((m: { paid_amount: number }) => m.paid_amount || 0);
+        const recentSum = amounts.slice(0, 3).reduce((a: number, b: number) => a + b, 0);
+        const olderSum = amounts.slice(3).reduce((a: number, b: number) => a + b, 0);
+        if (olderSum > 0 && recentSum < olderSum * 0.2) {
+          const alertKey = `sales_stagnation:成交额停滞`;
+          if (!recentAlertTypes.has(alertKey)) {
+            newAlerts.push({
+              alertType: 'sales_stagnation',
+              severity: 'high',
+              title: '成交额停滞',
+              description: `近3分钟成交额较前期下降${Math.round((1 - recentSum / olderSum) * 100)}%，建议主播进行商品促单话术`,
+            });
+          }
+        }
+      }
+
+      // 规则4: 新粉占比过高（可能引流人群不精准）
+      if (currentData.newFans > 0 && currentData.oldFans > 0) {
+        const newFanRatio = currentData.newFans / (currentData.newFans + currentData.oldFans);
+        if (newFanRatio > 0.8) {
+          const alertKey = `fan_imbalance:新粉占比过高`;
+          if (!recentAlertTypes.has(alertKey)) {
+            newAlerts.push({
+              alertType: 'fan_imbalance',
+              severity: 'low',
+              title: '新粉占比过高',
+              description: `新粉占比${(newFanRatio * 100).toFixed(1)}%，老粉仅${currentData.oldFans}人，粉丝粘性较低，建议增加老粉互动环节`,
+            });
+          }
+        }
+      }
+
+      // 规则5: 在线人数异常增长（可能被推流，是正向信号）
+      if (prevMetrics.data && prevMetrics.data.length >= 3) {
+        const recentOnline = prevMetrics.data.map((m: { online_count: number }) => m.online_count);
+        const avgOnline = recentOnline.reduce((a: number, b: number) => a + b, 0) / recentOnline.length;
+        if (avgOnline > 0 && currentData.online > avgOnline * 1.5) {
+          const alertKey = `online_surge:在线人数激增`;
+          if (!recentAlertTypes.has(alertKey)) {
+            newAlerts.push({
+              alertType: 'online_surge',
+              severity: 'low',
+              title: '在线人数激增',
+              description: `在线人数从平均${Math.round(avgOnline)}人激增至${currentData.online}人，增幅${Math.round((currentData.online / avgOnline - 1) * 100)}%，可能获得推流推荐`,
+            });
+          }
+        }
+      }
+
+      // 保存新预警到数据库
+      const startTime = session.start_time ? new Date(session.start_time).getTime() : now;
+      const offsetMinutes = Math.round((now - startTime) / 60000);
+
+      if (newAlerts.length > 0) {
+
+        for (const alert of newAlerts) {
+          const alertRecord = {
+            session_id: session.id,
+            alert_type: alert.alertType,
+            severity: alert.severity,
+            title: alert.title,
+            description: alert.description,
+            triggered_at: new Date(now).toISOString(),
+            offset_minutes: offsetMinutes,
+            is_read: false,
+            created_at: new Date(now).toISOString(),
+            updated_at: new Date(now).toISOString(),
+          };
+
+          const { error: insertError } = await client
+            .from('live_alerts')
+            .insert(alertRecord);
+
+          if (insertError) {
+            console.error(`[RealtimeAlert] 保存预警失败:`, insertError);
+          } else {
+            console.log(`[RealtimeAlert] 新预警: session=${session.id}, type=${alert.alertType}, severity=${alert.severity}`);
+          }
+        }
+
+        triggered.push({ sessionId: session.id, alertCount: newAlerts.length });
+      }
+
+      // 同时记录分钟级metrics
+      const minuteIndex = offsetMinutes;
+      await client
+        .from('live_metrics_minute')
+        .upsert({
+          session_id: session.id,
+          minute_index: minuteIndex,
+          online_count: currentData.online,
+          comment_count: currentData.comments,
+          order_count: 0,
+          paid_count: 0,
+          paid_amount: currentData.amount,
+          viewer_count: currentData.viewers,
+          created_at: new Date(now).toISOString(),
+        }, { onConflict: 'session_id,minute_index' });
+
+    } catch (err) {
+      console.error(`[RealtimeAlert] 检查session=${session.id}失败:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  return triggered;
 }
 
 // ==================== Worker 任务注册 ====================

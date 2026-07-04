@@ -1079,8 +1079,29 @@ function extractHighlights(_analysisText: string, jsonData?: any): Array<{
 async function saveAlerts(sessionId: number, alerts: Array<{ type: string; severity: string; title: string; description: string }>) {
   if (alerts.length === 0) return;
   const client = getSupabaseClient();
+  
+  // 获取session的start_time来计算预警的实际直播时间
+  const { data: session } = await client
+    .from('live_sessions')
+    .select('start_time')
+    .eq('id', sessionId)
+    .single();
+  
+  // 如果有start_time，计算直播已经进行了多久，用start_time + 已进行时长作为triggered_at
+  let triggeredAt: string;
+  if (session?.start_time) {
+    // 预警时间 = 直播开始时间 + 已进行时长（即当前时间）
+    // 但为了反映真实直播时间，使用start_time加上偏移量
+    const startTime = new Date(session.start_time).getTime();
+    const now = Date.now();
+    // 如果start_time是北京时间(如20:00:00)而now是UTC，需要对齐
+    // triggered_at使用now即可，前端通过offset_minutes转换为直播相对时间
+    triggeredAt = new Date(now).toISOString();
+  } else {
+    triggeredAt = new Date().toISOString();
+  }
+  
   for (const alert of alerts) {
-    const triggeredAt = new Date().toISOString();
     await client.from('live_alerts').insert({
       session_id: sessionId,
       alert_type: alert.type,

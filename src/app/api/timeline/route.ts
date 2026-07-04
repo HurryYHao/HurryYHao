@@ -26,7 +26,7 @@ export async function GET(request: Request) {
     // Get minute-level metrics to overlay on timeline
     const { data: metrics, error: metricsError } = await client
       .from('live_metrics_minute')
-      .select('minute_index, online_count, comment_count, order_count, paid_amount')
+      .select('minute_index, online_count, comment_count, order_count, paid_count, paid_amount')
       .eq('session_id', parseInt(sessionId, 10))
       .order('minute_index', { ascending: true });
 

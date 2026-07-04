@@ -24,7 +24,8 @@ export async function GET(request: Request) {
         resolved_at,
         live_sessions (
           room_name,
-          anchor_name
+          anchor_name,
+          start_time
         )
       `)
       .order('triggered_at', { ascending: false })
@@ -43,7 +44,22 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ data });
+    // 计算每条预警相对于直播开始时间的偏移
+    const enrichedData = (data || []).map((alert: any) => {
+      const session = alert.live_sessions as any;
+      let offsetMinutes: number | null = null;
+      if (session?.start_time && alert.triggered_at) {
+        const start = new Date(session.start_time).getTime();
+        const triggered = new Date(alert.triggered_at).getTime();
+        offsetMinutes = Math.max(0, Math.round((triggered - start) / 60000));
+      }
+      return {
+        ...alert,
+        offset_minutes: offsetMinutes,
+      };
+    });
+
+    return NextResponse.json({ data: enrichedData });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
