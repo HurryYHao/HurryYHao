@@ -1,0 +1,6 @@
+# 接受忽略（Next.js编译后的代码不应被lint检查）
+.next/
+node_modules/
+dist/
+build/
+out/
