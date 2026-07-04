@@ -123,9 +123,9 @@ export async function POST(request: Request) {
       if (!sessionsBySessionId.has(item.session_id)) {
         sessionsBySessionId.set(item.session_id, {
           session_id: item.session_id,
-          room_name: item.live_sessions?.room_name,
-          anchor_name: item.live_sessions?.anchor_name,
-          start_time: item.live_sessions?.start_time,
+          room_name: (item as any).room_name || (item as any).live_sessions?.room_name || '',
+          anchor_name: (item as any).anchor_name || (item as any).live_sessions?.anchor_name || '',
+          start_time: (item as any).start_time || (item as any).live_sessions?.start_time || '',
           items: []
         });
       }

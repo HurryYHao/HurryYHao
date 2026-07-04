@@ -5,48 +5,44 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const sessionId = searchParams.get('session_id');
-    const status = searchParams.get('status');
 
     const client = getSupabaseClient();
+
+    // 获取alerts
     let query = client
       .from('live_alerts')
-      .select(`
-        id,
-        session_id,
-        alert_type,
-        severity,
-        title,
-        description,
-        evidence,
-        suggestion,
-        status,
-        triggered_at,
-        resolved_at,
-        live_sessions (
-          room_name,
-          anchor_name,
-          start_time
-        )
-      `)
+      .select('*')
       .order('triggered_at', { ascending: false })
       .limit(100);
 
     if (sessionId) {
       query = query.eq('session_id', parseInt(sessionId, 10));
     }
-    if (status) {
-      query = query.eq('status', status);
-    }
 
-    const { data, error } = await query;
+    const { data: alerts, error } = await query;
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
+    // 获取相关session信息
+    const sessionIds = [...new Set((alerts || []).map((a: any) => a.session_id))];
+    const sessionMap: Record<number, any> = {};
+
+    if (sessionIds.length > 0) {
+      const { data: sessions } = await client
+        .from('live_sessions')
+        .select('*')
+        .in('id', sessionIds);
+
+      (sessions || []).forEach((s: any) => {
+        sessionMap[s.id] = s;
+      });
+    }
+
     // 计算每条预警相对于直播开始时间的偏移
-    const enrichedData = (data || []).map((alert: any) => {
-      const session = alert.live_sessions as any;
+    const enrichedData = (alerts || []).map((alert: any) => {
+      const session = sessionMap[alert.session_id];
       let offsetMinutes: number | null = null;
       if (session?.start_time && alert.triggered_at) {
         const start = new Date(session.start_time).getTime();
@@ -55,6 +51,11 @@ export async function GET(request: Request) {
       }
       return {
         ...alert,
+        session: session ? {
+          room_name: session.room_name,
+          anchor_name: session.anchor_name,
+          start_time: session.start_time,
+        } : null,
         offset_minutes: offsetMinutes,
       };
     });
@@ -68,9 +69,9 @@ export async function GET(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const body = await request.json();
-    const { id, status } = body;
+    const { id, status: newStatus } = body;
 
-    if (!id || !status) {
+    if (!id || !newStatus) {
       return NextResponse.json({ error: 'Missing id or status' }, { status: 400 });
     }
 
@@ -78,8 +79,8 @@ export async function PATCH(request: Request) {
     const { data, error } = await client
       .from('live_alerts')
       .update({
-        status,
-        resolved_at: status === 'resolved' || status === 'auto_resolved' ? new Date().toISOString() : null
+        is_read: newStatus === 'read',
+        updated_at: new Date().toISOString()
       })
       .eq('id', id)
       .select()

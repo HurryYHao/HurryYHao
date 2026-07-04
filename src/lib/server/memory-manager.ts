@@ -219,7 +219,7 @@ export class MemoryManager {
       .limit(1)
       .single();
     
-    if (error && error.code !== 'PGRST116') {
+    if (error && (error as Error & { code?: string }).code !== 'PGRST116') {
       throw new Error(`Failed to get active model: ${error.message}`);
     }
     return data || null;
@@ -282,7 +282,7 @@ export class MemoryManager {
       .limit(1)
       .single();
     
-    if (error && error.code !== 'PGRST116') {
+    if (error && (error as Error & { code?: string }).code !== 'PGRST116') {
       throw new Error(`Failed to get anchor memory: ${error.message}`);
     }
     
@@ -372,7 +372,7 @@ export class MemoryManager {
       .limit(1)
       .single();
     
-    if (error && error.code !== 'PGRST116') {
+    if (error && (error as Error & { code?: string }).code !== 'PGRST116') {
       throw new Error(`Failed to get product memory: ${error.message}`);
     }
     
@@ -443,7 +443,7 @@ export class MemoryManager {
       .eq('is_archived', false)
       .single();
     
-    if (error && error.code !== 'PGRST116') {
+    if (error && (error as Error & { code?: string }).code !== 'PGRST116') {
       throw new Error(`Failed to get session memory: ${error.message}`);
     }
     

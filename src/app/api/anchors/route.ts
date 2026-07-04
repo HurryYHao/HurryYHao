@@ -16,7 +16,7 @@ export async function GET(request: Request) {
         .eq('anchor_name', anchorName)
         .single();
 
-      if (error && error.code !== 'PGRST116') {
+      if (error && (error as Error & { code?: string }).code !== 'PGRST116') {
         return NextResponse.json({ error: error.message }, { status: 500 });
       }
 
