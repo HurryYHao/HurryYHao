@@ -7,6 +7,7 @@ import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { getRoomParameter } from './auth';
+import { cosManager } from './cos-manager';
 
 // ==================== 流地址转换 ====================
 
@@ -118,44 +119,61 @@ function generateFilename(roomName: string, segmentIndex: number): string {
 }
 
 /**
- * 从各种来源获取直播流地址
- * 优先级: getRoomParameter → 数据库缓存 → 构造默认地址
+ * 获取直播流地址
+ * 按照 xinyun_live_stream_api.md 中的规则，实施 4 级降级策略
  */
 export async function resolveStreamUrl(roomId: string): Promise<{ mainUrl: string; source: string }> {
-  // 方式1: 从 getRoomParameter 获取（需要 LiveToken，可能失败）
-  try {
-    const roomParam = await getRoomParameter(roomId);
-    if (roomParam.mainUrl) {
-      return { mainUrl: roomParam.mainUrl, source: 'getRoomParameter' };
-    }
-  } catch (err) {
-    console.warn('[Recorder] getRoomParameter 失败:', err instanceof Error ? err.message : err);
-  }
-
-  // 方式2: 从数据库获取已存储的 mainUrl
+  console.log(`[Recorder] resolveStreamUrl 开始: roomId=${roomId}`);
+  
+  // 策略 1: 尝试观众端 getRoomParameter API (api.clsjcorp.com)
+  // 注意：这需要管理页的 token
   try {
     const client = getSupabaseClient();
-    const { data } = await client
-      .from('live_sessions')
-      .select('trtc_info')
-      .eq('room_id', roomId)
-      .order('id', { ascending: false })
-      .limit(1)
+    const { data: config } = await client
+      .from('system_config')
+      .select('config_value')
+      .eq('config_key', 'admin_token')
       .maybeSingle();
 
-    if (data?.trtc_info && typeof data.trtc_info === 'object') {
-      const info = data.trtc_info as Record<string, unknown>;
-      if (info.mainUrl && typeof info.mainUrl === 'string') {
-        return { mainUrl: info.mainUrl, source: 'database_cache' };
+    if (config?.config_value) {
+      const response = await fetch(
+        `https://api.clsjcorp.com/api/livebiz/public/openClassesRoom/audience/getRoomParameter?roomId=${roomId}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${config.config_value}`,
+            'tenantid': process.env.XINYUN_TENANT_ID || '751087375173437746'
+          }
+        }
+      );
+      
+      if (response.ok) {
+        const result = await response.json();
+        if (result.data?.mainUrl) {
+          console.log(`[Recorder] 从观众端 API 成功获取: ${result.data.mainUrl}`);
+          return { mainUrl: result.data.mainUrl, source: 'audience_api' };
+        }
       }
     }
-  } catch {
-    // 数据库查询失败继续
+  } catch (err) {
+    console.warn('[Recorder] 观众端 API 获取失败:', err instanceof Error ? err.message : err);
   }
 
-  // 方式3: 根据已知模式构造流地址
+  // 策略 2: 尝试助理端 getRoomParameter API (api.xinyuntv.com)
+  try {
+    console.log(`[Recorder] 尝试从助理端 getRoomParameter 获取: roomId=${roomId}`);
+    const roomParam = await getRoomParameter(roomId);
+    if (roomParam.mainUrl) {
+      console.log(`[Recorder] 从助理端 API 成功获取: ${roomParam.mainUrl}`);
+      return { mainUrl: roomParam.mainUrl, source: 'assistant_api' };
+    }
+  } catch (err) {
+    console.warn('[Recorder] 助理端 API 获取失败 (可能401):', err instanceof Error ? err.message : err);
+  }
+
+  // 策略 3: 回退直接构造流地址 (不验证，直接交给 ffmpeg)
   const defaultUrl = `webrtc://play-stream.clsjcorp.com/live_1600073723/main_${roomId}_720p`;
-  return { mainUrl: defaultUrl, source: 'default_pattern' };
+  console.log(`[Recorder] 使用回退构造的 URL: ${defaultUrl}`);
+  return { mainUrl: defaultUrl, source: 'fallback_pattern' };
 }
 
 /**
@@ -164,9 +182,10 @@ export async function resolveStreamUrl(roomId: string): Promise<{ mainUrl: strin
  * 包含重试限制：如果最近连续失败超过 MAX_RETRY_COUNT 次，则跳过
  */
 export async function autoStartRecording(
-  roomId: string,
-  sessionId: number,
-  roomName: string
+  roomId: string, 
+  sessionId: number, 
+  roomName: string,
+  providedMainUrl?: string | null
 ): Promise<{ success: boolean; error?: string }> {
   // 已在录制中，跳过
   if (activeRecordings.has(roomId)) {
@@ -179,10 +198,8 @@ export async function autoStartRecording(
     const elapsed = Date.now() - retry.lastAttempt;
     if (elapsed < RETRY_BACKOFF_MS) {
       // 还在退避期内，跳过
-      return { success: false, error: `录制重试次数已达上限，${Math.round((RETRY_BACKOFF_MS - elapsed) / 1000)}秒后重试` };
+      return { success: false, error: `重试退避中，还需等待 ${Math.round((RETRY_BACKOFF_MS - elapsed) / 1000)}s` };
     }
-    // 退避期已过但不超过10分钟：仍然不重置计数器，让 canAutoRestart/isStreamDead 判定
-    // 这样可以防止流已死时反复重启
   }
 
   try {
@@ -205,7 +222,20 @@ export async function autoStartRecording(
       console.warn(`[AutoRecording] 查询片段信息失败，默认从 #1 开始:`, dbErr instanceof Error ? dbErr.message : dbErr);
     }
 
-    const { mainUrl, source } = await resolveStreamUrl(roomId);
+    let mainUrl: string;
+    let source: string;
+
+    // 优先使用预提供的流地址
+    if (providedMainUrl) {
+      mainUrl = providedMainUrl;
+      source = 'live_list';
+      console.log(`[AutoRecording] 使用直播列表预提供的流地址`);
+    } else {
+      const streamResult = await resolveStreamUrl(roomId);
+      mainUrl = streamResult.mainUrl;
+      source = streamResult.source;
+    }
+
     const flvUrl = webrtcToFlvUrl(mainUrl);
     console.log(`[AutoRecording] 自动启动录制: room=${roomId}, name=${roomName}, source=${source}, flv=${flvUrl}, seg=${nextSegmentIndex}`);
 
@@ -258,7 +288,11 @@ export function startAudioRecording(
     return { success: false, error: `房间 ${roomId} 已在录制中` };
   }
 
+  console.log(`[Recording] 准备启动录制: room=${roomId}, session=${sessionId}, mainUrl=${mainUrl}`);
+
   const flvUrl = webrtcToFlvUrl(mainUrl);
+  console.log(`[Recording] 转换流地址: mainUrl=${mainUrl} -> flvUrl=${flvUrl}`);
+  
   if (!flvUrl) {
     return { success: false, error: '无法转换流地址' };
   }
@@ -266,6 +300,8 @@ export function startAudioRecording(
   const recordingDir = getRecordingDir();
   const filename = generateFilename(roomName, segmentIndex);
   const outputPath = path.join(recordingDir, filename);
+
+  console.log(`[Recording] 录制配置: dir=${recordingDir}, filename=${filename}, outputPath=${outputPath}`);
 
   // 构建 ffmpeg 命令
   // -i: 输入 FLV 流
@@ -286,7 +322,7 @@ export function startAudioRecording(
     outputPath,
   ];
 
-  console.log(`[Recording] 启动录制: room=${roomId}, name=${roomName}, seg=${segmentIndex}, url=${flvUrl}`);
+  console.log(`[Recording] 启动 ffmpeg: args=${JSON.stringify(ffmpegArgs)}`);
 
   let ffmpegProcess: ChildProcess;
   try {
@@ -294,8 +330,11 @@ export function startAudioRecording(
       stdio: ['pipe', 'pipe', 'pipe'],  // stdin=pipe 以便发送 'q' 命令优雅退出
       detached: false,
     });
+    console.log(`[Recording] ffmpeg 进程启动成功, pid=${ffmpegProcess.pid}`);
   } catch (err) {
-    return { success: false, error: `ffmpeg 启动失败: ${err instanceof Error ? err.message : String(err)}` };
+    const errorMsg = `ffmpeg 启动失败: ${err instanceof Error ? err.message : String(err)}`;
+    console.error(`[Recording] ${errorMsg}`);
+    return { success: false, error: errorMsg };
   }
 
   const recording: RecordingProcess = {
@@ -312,23 +351,43 @@ export function startAudioRecording(
   // 监听 stderr（ffmpeg 输出日志到 stderr）
   let stderrBuffer = '';
   ffmpegProcess.stderr?.on('data', (data: Buffer) => {
-    stderrBuffer += data.toString();
-    // 只保留最后 2000 字符
-    if (stderrBuffer.length > 2000) {
-      stderrBuffer = stderrBuffer.slice(-2000);
+    const logLine = data.toString();
+    stderrBuffer += logLine;
+    // 只保留最后 5000 字符
+    if (stderrBuffer.length > 5000) {
+      stderrBuffer = stderrBuffer.slice(-5000);
+    }
+    // 输出调试信息
+    if (logLine.includes('error') || logLine.includes('Error') || logLine.includes('ERROR')) {
+      console.error(`[Recording] ffmpeg error: ${logLine.trim()}`);
     }
   });
 
-  ffmpegProcess.on('close', (code) => {
-    console.log(`[Recording] 录制进程退出: room=${roomId}, seg=${segmentIndex}, code=${code}`);
+  ffmpegProcess.on('close', (code, signal) => {
+    console.log(`[Recording] 录制进程退出: room=${roomId}, seg=${segmentIndex}, code=${code}, signal=${signal}`);
+    
+    // 输出完整的 ffmpeg 日志用于调试
+    if (code !== 0) {
+      console.error(`[Recording] ffmpeg 完整 stderr 输出: ${stderrBuffer}`);
+    }
+    
     activeRecordings.delete(roomId);
 
     // 检查是否是手动停止（mainUrl 被清空）
     const wasManualStop = !recording.mainUrl;
+    console.log(`[Recording] wasManualStop=${wasManualStop}`);
 
     if (code === 0 && !wasManualStop) {
       // 正常结束（30分钟片段录制完成） - 重置重试计数
       retryTracker.delete(roomId);
+      
+      // 检查输出文件是否存在
+      if (fs.existsSync(outputPath)) {
+        const stats = fs.statSync(outputPath);
+        console.log(`[Recording] 录制文件生成成功: ${outputPath}, size=${stats.size} bytes`);
+      } else {
+        console.warn(`[Recording] 录制文件未生成: ${outputPath}`);
+      }
 
       // 记录片段信息到数据库
       saveSegmentRecord(sessionId, roomId, segmentIndex, recording.startTime, new Date(), outputPath, 'completed').then(() => {
@@ -352,12 +411,13 @@ export function startAudioRecording(
     } else if (code !== 0 && !wasManualStop) {
       console.error(`[Recording] ffmpeg 异常退出(code=${code}): room=${roomId}`);
       // 截取最后的错误信息
-      const lastLines = stderrBuffer.split('\n').filter(Boolean).slice(-5).join('; ');
-      console.error(`[Recording] ffmpeg stderr: ${lastLines}`);
+      const lastLines = stderrBuffer.split('\n').filter(Boolean).slice(-10).join('\n');
+      console.error(`[Recording] ffmpeg 错误详情:\n${lastLines}`);
 
       // 记录失败（用于重试限制）
       const current = retryTracker.get(roomId) || { count: 0, lastAttempt: 0 };
       retryTracker.set(roomId, { count: current.count + 1, lastAttempt: Date.now() });
+      console.warn(`[Recording] 失败记录更新: count=${current.count + 1}/${MAX_RETRY_COUNT}`);
 
       // 如果重试次数已达上限，不再自动启动下一段
       if (current.count + 1 >= MAX_RETRY_COUNT) {
@@ -366,12 +426,13 @@ export function startAudioRecording(
     }
     // 手动停止时重置重试计数
     if (wasManualStop) {
+      console.log(`[Recording] 手动停止，重置重试计数: room=${roomId}`);
       retryTracker.delete(roomId);
     }
   });
 
   ffmpegProcess.on('error', (err) => {
-    console.error(`[Recording] 进程错误: room=${roomId}`, err.message);
+    console.error(`[Recording] 进程错误: room=${roomId}, error=${err.message}, stack=${err.stack}`);
     activeRecordings.delete(roomId);
   });
 
@@ -515,12 +576,15 @@ export async function getRecordingSegments(sessionId: number): Promise<Array<{
 /**
  * 获取指定房间的已录制音频片段（从磁盘扫描）
  */
-export function getSegments(roomId: string, roomName?: string): Array<{
+export async function getSegments(roomId: string, roomName?: string): Promise<Array<{
   filename: string;
   url: string;
   size: number;
   mtime: string;
-}> {
+  transcription?: string;
+  transcribe_status?: string;
+  segmentSeq?: number;
+}>> {
   const fs = require('fs') as typeof import('fs');
   const recordingDir = getRecordingDir();
 
@@ -536,16 +600,57 @@ export function getSegments(roomId: string, roomName?: string): Array<{
       ))
       .sort();
 
+    // 获取数据库中的转写状态
+    const client = getSupabaseClient();
+    const { data: recordingSegments } = await client
+      .from('recording_segments')
+      .select('segment_seq, transcribe_status')
+      .eq('room_id', roomId);
+
+    const { data: snapshotData } = await client
+      .from('snapshot_data')
+      .select('snapshot_seq, transcription')
+      .eq('room_id', roomId);
+
+    // 构建映射
+    const transcribeStatusMap = new Map<number, string>();
+    const transcriptionMap = new Map<number, string>();
+    
+    if (recordingSegments) {
+      for (const seg of recordingSegments) {
+        if (seg.segment_seq && seg.transcribe_status) {
+          transcribeStatusMap.set(seg.segment_seq, seg.transcribe_status);
+        }
+      }
+    }
+    
+    if (snapshotData) {
+      for (const snap of snapshotData) {
+        if (snap.snapshot_seq && snap.transcription) {
+          transcriptionMap.set(snap.snapshot_seq, snap.transcription);
+        }
+      }
+    }
+
     return files.map((f: string) => {
       const stat = fs.statSync(path.join(recordingDir, f));
+      
+      // 从文件名提取片段序号
+      const match = f.match(/_seg(\d+)_/);
+      const segmentSeq = match ? parseInt(match[1], 10) : undefined;
+      
       return {
         filename: f,
         url: `/api/recorder/file/${encodeURIComponent(f)}`,
         size: stat.size,
         mtime: stat.mtime.toISOString(),
+        segmentSeq,
+        transcribe_status: segmentSeq ? transcribeStatusMap.get(segmentSeq) : undefined,
+        transcription: segmentSeq ? transcriptionMap.get(segmentSeq) : undefined,
       };
     });
-  } catch {
+  } catch (e) {
+    console.error('[Recorder] Error getting segments:', e);
     return [];
   }
 }

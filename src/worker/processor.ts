@@ -5,19 +5,94 @@ export class WorkerProcessor {
   private isRunning = false;
   private currentJob: any = null;
   private pollInterval = 5000; // 5秒轮询一次队列
+  private monitorIntervalMs = 60_000; // 60秒服务端主动轮询直播状态
+  private analysisIntervalMs = 30_000; // 30秒服务端检查一次定时分析
+  private monitorTimer: NodeJS.Timeout | null = null;
+  private analysisTimer: NodeJS.Timeout | null = null;
+  private monitorTickRunning = false;
+  private analysisTickRunning = false;
 
   async start() {
     if (this.isRunning) return;
     this.isRunning = true;
     console.log('[WorkerProcessor] Started');
-    
+
+    this.startSchedulers();
+
     // 异步循环处理任务
     this.processLoop();
   }
 
   stop() {
     this.isRunning = false;
+    if (this.monitorTimer) {
+      clearInterval(this.monitorTimer);
+      this.monitorTimer = null;
+    }
+    if (this.analysisTimer) {
+      clearInterval(this.analysisTimer);
+      this.analysisTimer = null;
+    }
     console.log('[WorkerProcessor] Stopped');
+  }
+
+  private startSchedulers() {
+    if (!this.monitorTimer) {
+      this.monitorTimer = setInterval(() => {
+        this.runMonitorTick().catch((error) => {
+          console.error('[WorkerProcessor] Monitor scheduler error:', error);
+        });
+      }, this.monitorIntervalMs);
+    }
+
+    if (!this.analysisTimer) {
+      this.analysisTimer = setInterval(() => {
+        this.runAnalysisTick().catch((error) => {
+          console.error('[WorkerProcessor] Analysis scheduler error:', error);
+        });
+      }, this.analysisIntervalMs);
+    }
+
+    this.runMonitorTick().catch((error) => {
+      console.error('[WorkerProcessor] Initial monitor tick error:', error);
+    });
+    this.runAnalysisTick().catch((error) => {
+      console.error('[WorkerProcessor] Initial analysis tick error:', error);
+    });
+  }
+
+  private async runMonitorTick() {
+    if (!this.isRunning || this.monitorTickRunning) return;
+    this.monitorTickRunning = true;
+    try {
+      const { pollLiveStatus } = await import('@/lib/server/monitor');
+      const result = await pollLiveStatus();
+      if (result.newLiveRooms.length > 0 || result.endedRooms.length > 0) {
+        console.log(
+          `[WorkerProcessor] Monitor tick completed: new=${result.newLiveRooms.length}, ended=${result.endedRooms.length}`
+        );
+      }
+    } catch (error) {
+      console.error('[WorkerProcessor] Monitor tick failed:', error);
+    } finally {
+      this.monitorTickRunning = false;
+    }
+  }
+
+  private async runAnalysisTick() {
+    if (!this.isRunning || this.analysisTickRunning) return;
+    this.analysisTickRunning = true;
+    try {
+      const { checkAndRunScheduledAnalysis } = await import('@/lib/server/monitor');
+      const triggered = await checkAndRunScheduledAnalysis();
+      if (triggered.length > 0) {
+        console.log(`[WorkerProcessor] Analysis tick triggered ${triggered.length} scheduled analyses`);
+      }
+    } catch (error) {
+      console.error('[WorkerProcessor] Analysis tick failed:', error);
+    } finally {
+      this.analysisTickRunning = false;
+    }
   }
 
   private async processLoop() {
@@ -89,18 +164,7 @@ export class WorkerProcessor {
           result = await fetchAllSnapshotData(job.session_id, payload.roomId, job.segment_seq);
           break;
           
-        case 'replay_analysis':
-          const { runReplayAnalysis } = await import('@/lib/server/replay-monitor');
-          // 更新会话状态为分析中
-          const client = getSupabaseClient();
-          await client.from('live_sessions').update({ status: 'analyzing' }).eq('id', job.session_id);
-          
-          // 执行录播分析
-          await runReplayAnalysis(job.session_id, payload.roomId, payload.liveSpaceId);
-          
-          // 完成后更新状态
-          await client.from('live_sessions').update({ status: 'ended' }).eq('id', job.session_id);
-          break;
+
           
         default:
           throw new Error(`Unknown job type: ${job.job_type}`);

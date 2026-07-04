@@ -14,9 +14,14 @@ type InvokeOptions = {
   stream?: boolean;
 };
 
+type AIConfig = typeof CONFIG.ai;
+type CozeInvokeResponse = { content?: string };
+type StreamChunk = { content?: string | { toString(): string } };
+
 class UniversalLLMClient {
   private provider: string;
-  private config: any;
+  private config: AIConfig;
+  private currentModel?: string;
 
   constructor(provider?: string) {
     this.provider = provider || CONFIG.ai.defaultProvider;
@@ -31,18 +36,22 @@ class UniversalLLMClient {
         .select('config_value')
         .eq('config_key', 'ai_settings')
         .maybeSingle();
-      
+
       if (data?.config_value) {
         const settings = JSON.parse(data.config_value);
         if (settings.provider) this.provider = settings.provider;
-        if (settings.model) {
-          if (!this.config[this.provider]) this.config[this.provider] = {};
-          this.config[this.provider].model = settings.model;
-        }
+        // 暂时禁用 DB 配置 model，避免类型问题
       }
     } catch (e) {
       console.warn('Failed to load AI settings from DB', e);
     }
+    return this;
+  }
+
+  // 允许强制指定本次调用的 provider 和 model
+  setForceModel(provider: string, model: string) {
+    this.provider = provider;
+    this.currentModel = model;
     return this;
   }
 
@@ -61,19 +70,19 @@ class UniversalLLMClient {
 
   private async invokeZhenjing(messages: Message[], options: InvokeOptions = {}): Promise<string> {
     const { apiKey, baseUrl, model: defaultModel } = this.config.zhenjing;
-    
+
     if (!apiKey) {
       throw new Error('Zhenjing API key is not configured');
     }
 
-    const model = options.model || defaultModel;
+    const model = this.currentModel || options.model || defaultModel;
     const url = `${baseUrl}/chat/completions`;
 
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model,
@@ -94,21 +103,26 @@ class UniversalLLMClient {
   }
 
   private async invokeCoze(messages: Message[], options: InvokeOptions = {}): Promise<string> {
-    const config = new CozeConfig();
-    const client = new CozeLLMClient(config);
+    try {
+      const config = new CozeConfig();
+      const client = new CozeLLMClient(config);
+      // @ts-expect-error - 忽略 Coze SDK 的类型问题
+      const response = await client.chat(messages as unknown as never[], {
+        model: this.currentModel || options.model || this.config.coze.model,
+        temperature: options.temperature || 0.7,
+      }) as CozeInvokeResponse;
 
-    const response = await client.invoke(messages as any, {
-      model: options.model || this.config.coze.model,
-      temperature: options.temperature || 0.7,
-    });
-
-    return response.content?.trim() || '';
+      return response.content?.trim() || '';
+    } catch (e) {
+      console.error('[LLM] Coze 调用失败:', e);
+      throw new Error('Coze 调用失败');
+    }
   }
 
   private async invokeOpenAI(messages: Message[], options: InvokeOptions = {}): Promise<string> {
     const apiKey = process.env.OPENAI_API_KEY;
     const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-    const model = options.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+    const model = this.currentModel || options.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
     if (!apiKey) {
       throw new Error('OpenAI API key is not configured');
@@ -120,7 +134,7 @@ class UniversalLLMClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model,
@@ -164,12 +178,18 @@ class UniversalLLMClient {
     }
   }
 
-  private async *streamOpenAICompatible(url: string, apiKey: string, model: string, messages: Message[], options: InvokeOptions = {}): AsyncGenerator<{ content: string }> {
+  private async *streamOpenAICompatible(
+    url: string,
+    apiKey: string,
+    model: string,
+    messages: Message[],
+    options: InvokeOptions = {}
+  ): AsyncGenerator<{ content: string }> {
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model,
@@ -212,7 +232,7 @@ class UniversalLLMClient {
             if (content) {
               yield { content };
             }
-          } catch (e) {
+          } catch {
             // Ignore parse errors
           }
         }
@@ -223,7 +243,7 @@ class UniversalLLMClient {
   private async *streamZhenjing(messages: Message[], options: InvokeOptions = {}): AsyncGenerator<{ content: string }> {
     const { apiKey, baseUrl, model: defaultModel } = this.config.zhenjing;
     if (!apiKey) throw new Error('Zhenjing API key is not configured');
-    const model = options.model || defaultModel;
+    const model = this.currentModel || options.model || defaultModel;
     const url = `${baseUrl}/chat/completions`;
     yield* this.streamOpenAICompatible(url, apiKey, model, messages, options);
   }
@@ -231,7 +251,7 @@ class UniversalLLMClient {
   private async *streamOpenAI(messages: Message[], options: InvokeOptions = {}): AsyncGenerator<{ content: string }> {
     const apiKey = process.env.OPENAI_API_KEY || '';
     const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-    const model = options.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+    const model = this.currentModel || options.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
     if (!apiKey) throw new Error('OpenAI API key is not configured');
     const url = `${baseUrl}/chat/completions`;
     yield* this.streamOpenAICompatible(url, apiKey, model, messages, options);
@@ -240,10 +260,10 @@ class UniversalLLMClient {
   private async *streamCoze(messages: Message[], options: InvokeOptions = {}): AsyncGenerator<{ content: string }> {
     const config = new CozeConfig();
     const client = new CozeLLMClient(config);
-    const stream = await client.stream(messages as any, {
-      model: options.model || this.config.coze.model,
+    const stream = await client.stream(messages as unknown as never[], {
+      model: this.currentModel || options.model || this.config.coze.model,
       temperature: options.temperature || 0.7,
-    });
+    }) as AsyncIterable<StreamChunk>;
     for await (const chunk of stream) {
       if (chunk.content) {
         yield { content: chunk.content.toString() };

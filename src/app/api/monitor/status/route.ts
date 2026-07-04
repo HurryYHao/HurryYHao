@@ -1,42 +1,14 @@
-// GET /api/monitor/status - 获取监控状态概览（含自动分析调度）
+// GET /api/monitor/status - 获取监控状态概览（只读）
 // POST /api/monitor/status - 手动触发状态轮询
 import { NextRequest, NextResponse } from 'next/server';
-import { getNumberAnalysis, getLiveList, pollLiveStatus, checkAndRunScheduledAnalysis, getRecordingStatus, initializeWorker, type LiveRoom } from '@/lib/server/monitor';
+import { getNumberAnalysis, getLiveList, pollLiveStatus, getRecordingStatus, checkAndRunScheduledAnalysis, type LiveRoom } from '@/lib/server/monitor';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { fetchAnalysis, fetchOrderAnalysis, fetchChartData } from '@/lib/server/fetcher';
 import { getLiveSpaceId } from '@/lib/server/auth';
 
-// Worker 单例初始化标记
-let workerInitialized = false;
-
 export async function GET(request: NextRequest) {
   try {
-    // ===== Worker 初始化（仅一次） =====
-    if (!workerInitialized) {
-      workerInitialized = true;
-      try { initializeWorker(); } catch (e) { console.error('[Worker] 初始化失败:', e); }
-    }
-
-    // ===== 0. 自动检测直播状态变化（开始/结束） =====
-    try {
-      // 限制5秒超时，避免外部API阻塞整个请求
-      await Promise.race([
-        pollLiveStatus(),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('pollLiveStatus timeout')), 5000)),
-      ]);
-    } catch (err) {
-      console.error('[MonitorStatus] 状态检测异常:', err instanceof Error ? err.message : err);
-    }
-
-    // ===== 1. 自动片段分析调度（piggyback 在前端30s轮询上） =====
-    let autoAnalysisTriggered: Array<{ sessionId: number; roomId: string; segmentSeq: number }> = [];
-    try {
-      autoAnalysisTriggered = await checkAndRunScheduledAnalysis();
-    } catch (err) {
-      console.error('[MonitorStatus] 自动分析调度异常:', err instanceof Error ? err.message : err);
-    }
-
-    // ===== 2. 获取平台统计 =====
+    // ===== 1. 获取平台统计 =====
     let numberAnalysis = { total: 0, inStart: 0, notStart: 0 };
     try {
       numberAnalysis = await getNumberAnalysis();
@@ -44,7 +16,7 @@ export async function GET(request: NextRequest) {
       // Token 可能未初始化
     }
 
-    // ===== 3. 获取直播列表 =====
+    // ===== 2. 获取直播列表 =====
     let rooms: LiveRoom[] = [];
     try {
       const result = await getLiveList(1, 50);
@@ -53,7 +25,7 @@ export async function GET(request: NextRequest) {
       // ignore
     }
 
-    // ===== 4. 获取数据库中的活跃会话 =====
+    // ===== 3. 获取数据库中的活跃会话 =====
     const client = getSupabaseClient();
     const { data: activeSessions, error } = await client
       .from('live_sessions')
@@ -73,7 +45,7 @@ export async function GET(request: NextRequest) {
 
     if (recentError) throw new Error(`查询历史会话失败: ${recentError.message}`);
 
-    // ===== 5. 对正在直播的房间获取实时统计数据 =====
+    // ===== 4. 对正在直播的房间获取实时统计数据 =====
     const liveRooms = rooms.filter((r) => r.liveStatus === 'STARTING');
     type RoomLiveStats = {
       roomId: string;
@@ -151,7 +123,7 @@ export async function GET(request: NextRequest) {
       liveRoomCount: liveRooms.length,
     };
 
-    // ===== 6. 获取录制/分析状态 =====
+    // ===== 5. 获取录制/分析状态 =====
     let recordingStatus: Array<{
       sessionId: number;
       roomId: string;
@@ -192,7 +164,7 @@ export async function GET(request: NextRequest) {
         recentSessions: recentSessions || [],
         liveSummary,
         recordingStatus,
-        autoAnalysisTriggered,
+        autoAnalysisTriggered: [],
       },
     });
   } catch (err) {

@@ -773,8 +773,8 @@ export async function getRoomParameter(roomId: string): Promise<{
       method: 'GET',
       headers: {
         Accept: 'application/json, text/plain, */*',
-        LiveToken: liveToken,
-        gray_version: 'PROD',
+        Token: liveToken,
+        TenantId: CONFIG.xinyun.tenantId,
       },
     }
   );

@@ -7,23 +7,19 @@ import { cn } from '@/lib/utils';
 import { useMonitor } from '@/components/dashboard/monitor-provider';
 import { MonitorProvider } from '@/components/dashboard/monitor-provider';
 import {
-  BarChart3, Monitor, FileText, Settings, Activity, Radio, Pause, Play, Brain, Bell, CheckSquare, Users, Package, Clock, PlayCircle, List, AlertTriangle, Cpu, BarChart
+  BarChart3, Monitor, FileText, Settings, Activity, Radio, Pause, Play, Brain, Bell, CheckSquare, Users, Package, Clock, AlertTriangle
 } from 'lucide-react';
 
 const navigation = [
   { name: '概览', href: '/dashboard', icon: BarChart3 },
-  { name: '直播监控', href: '/dashboard/monitor', icon: Monitor },
   { name: '数据大盘', href: '/dashboard/live', icon: Activity },
   { name: '实时预警', href: '/dashboard/alerts', icon: Bell },
-  { name: '录播回放统计', href: '/dashboard/replay-stats', icon: PlayCircle },
   { name: '统一直播时间轴', href: '/dashboard/timeline', icon: Clock },
   { name: '商品作战卡', href: '/dashboard/products', icon: Package },
   { name: '复盘任务', href: '/dashboard/tasks', icon: CheckSquare },
   { name: '主播画像', href: '/dashboard/anchors', icon: Users },
   { name: '分析报告', href: '/dashboard/reports', icon: FileText },
   { name: '知识库', href: '/dashboard/knowledge', icon: Brain },
-  { name: '系统日志', href: '/dashboard/logs', icon: List },
-  { name: '系统监控', href: '/dashboard/system-monitor', icon: Cpu },
   { name: '系统设置', href: '/dashboard/settings', icon: Settings },
 ];
 

@@ -1,11 +1,4 @@
-import { sql } from "drizzle-orm";
-import { pgTable, serial, text, varchar, timestamp, integer, numeric, jsonb, boolean, index, decimal, bigint } from "drizzle-orm/pg-core";
-
-// System table - must be preserved
-export const healthCheck = pgTable("health_check", {
-  id: serial().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
-});
+import { pgTable, serial, text, varchar, timestamp, integer, numeric, jsonb, boolean, index, bigint } from "drizzle-orm/pg-core";
 
 // 直播场次
 export const liveSessions = pgTable(
@@ -261,18 +254,92 @@ export const liveAlerts = pgTable(
     id: serial().primaryKey(),
     session_id: integer("session_id").notNull().references(() => liveSessions.id, { onDelete: "cascade" }),
     alert_type: varchar("alert_type", { length: 50 }).notNull(), // viewer_drop/conversion_low/negative_surge/no_order/script_drift/long_product
+    level: varchar("level", { length: 20 }), // 兼容本地存储旧字段
     severity: varchar("severity", { length: 20 }).notNull().default("warning"), // critical/warning/info
     title: varchar("title", { length: 500 }).notNull(),
     description: text("description"),
+    evidence: jsonb("evidence"),
+    suggestion: text("suggestion"),
     metric_name: varchar("metric_name", { length: 50 }),
     metric_value: numeric("metric_value", { precision: 12, scale: 2 }),
     threshold_value: numeric("threshold_value", { precision: 12, scale: 2 }),
+    status: varchar("status", { length: 20 }).notNull().default("open"), // open/resolved/auto_resolved
+    triggered_at: timestamp("triggered_at", { withTimezone: true }).defaultNow().notNull(),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
     is_read: boolean("is_read").notNull().default(false),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     index("live_alerts_session_idx").on(table.session_id),
+    index("live_alerts_status_idx").on(table.status),
+    index("live_alerts_triggered_at_idx").on(table.triggered_at),
     index("live_alerts_read_idx").on(table.is_read),
+  ]
+);
+
+// 直播分钟级指标
+export const liveMetricsMinute = pgTable(
+  "live_metrics_minute",
+  {
+    id: serial().primaryKey(),
+    session_id: integer("session_id").notNull().references(() => liveSessions.id, { onDelete: "cascade" }),
+    minute_index: integer("minute_index").notNull(),
+    online_count: integer("online_count"),
+    comment_count: integer("comment_count"),
+    click_count: integer("click_count"),
+    order_count: integer("order_count"),
+    paid_count: integer("paid_count"),
+    paid_amount: numeric("paid_amount", { precision: 12, scale: 2 }),
+    viewer_count: integer("viewer_count"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("live_metrics_minute_session_idx").on(table.session_id),
+    index("live_metrics_minute_session_minute_idx").on(table.session_id, table.minute_index),
+  ]
+);
+
+// 直播时间轴事件
+export const liveTimelineEvents = pgTable(
+  "live_timeline_events",
+  {
+    id: serial().primaryKey(),
+    session_id: integer("session_id").notNull().references(() => liveSessions.id, { onDelete: "cascade" }),
+    timestamp: timestamp("timestamp", { withTimezone: true }).notNull(),
+    offset_seconds: integer("offset_seconds"),
+    event_type: varchar("event_type", { length: 100 }).notNull(),
+    content: text("content"),
+    metrics: jsonb("metrics"),
+    source: varchar("source", { length: 50 }),
+    importance: varchar("importance", { length: 20 }).notNull().default("medium"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("live_timeline_events_session_idx").on(table.session_id),
+    index("live_timeline_events_timestamp_idx").on(table.timestamp),
+    index("live_timeline_events_type_idx").on(table.event_type),
+  ]
+);
+
+// 主播画像聚合
+export const anchorProfiles = pgTable(
+  "anchor_profiles",
+  {
+    anchor_name: varchar("anchor_name", { length: 100 }).primaryKey(),
+    avg_sales: numeric("avg_sales", { precision: 12, scale: 2 }),
+    avg_viewers: numeric("avg_viewers", { precision: 12, scale: 2 }),
+    avg_online: numeric("avg_online", { precision: 12, scale: 2 }),
+    avg_conversion_rate: numeric("avg_conversion_rate", { precision: 8, scale: 2 }),
+    avg_comment_rate: numeric("avg_comment_rate", { precision: 8, scale: 2 }),
+    avg_score: numeric("avg_score", { precision: 4, scale: 1 }),
+    dimension_scores: jsonb("dimension_scores"),
+    strengths: jsonb("strengths"),
+    weaknesses: jsonb("weaknesses"),
+    best_product_types: jsonb("best_product_types"),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("anchor_profiles_avg_score_idx").on(table.avg_score),
   ]
 );
 
@@ -500,251 +567,5 @@ export const modelSwitchLogs = pgTable(
   (table) => [
     index("model_switch_created_at_idx").on(table.created_at),
     index("model_switch_status_idx").on(table.migration_status),
-  ]
-);
-
-// ==================== 系统日志 ====================
-
-// 系统操作日志
-export const systemOperationLogs = pgTable(
-  "system_operation_logs",
-  {
-    id: serial().primaryKey(),
-    operation_type: varchar("operation_type", { length: 50 }).notNull(), // login/logout/start_monitor/stop_monitor/create_user/update_config等
-    user_id: varchar("user_id", { length: 100 }),
-    username: varchar("username", { length: 100 }),
-    // 操作详情
-    resource_type: varchar("resource_type", { length: 50 }), // session/user/config/product等
-    resource_id: varchar("resource_id", { length: 100 }),
-    action: varchar("action", { length: 50 }), // create/update/delete/view
-    description: text("description"), // 操作描述
-    // 数据变更
-    old_value: jsonb("old_value"), // 变更前的值
-    new_value: jsonb("new_value"), // 变更后的值
-    // 请求信息
-    ip_address: varchar("ip_address", { length: 50 }),
-    user_agent: text("user_agent"),
-    // 结果
-    status: varchar("status", { length: 20 }).notNull().default("success"), // success/failed/partial
-    error_message: text("error_message"),
-    // 时间
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => [
-    index("sys_log_operation_type_idx").on(table.operation_type),
-    index("sys_log_user_idx").on(table.user_id),
-    index("sys_log_created_at_idx").on(table.created_at),
-    index("sys_log_status_idx").on(table.status),
-  ]
-);
-
-// 运行日志
-export const runtimeLogs = pgTable(
-  "runtime_logs",
-  {
-    id: serial().primaryKey(),
-    log_level: varchar("log_level", { length: 20 }).notNull(), // debug/info/warn/error/fatal
-    log_type: varchar("log_type", { length: 50 }).notNull(), // system/monitor/worker/analysis/api等
-    source: varchar("source", { length: 100 }).notNull(), // 日志来源：模块/文件/函数名
-    // 内容
-    message: text("message").notNull(),
-    context: jsonb("context"), // 附加上下文数据
-    error_stack: text("error_stack"), // 错误堆栈
-    // 关联
-    session_id: integer("session_id"),
-    job_id: integer("job_id"),
-    // 性能
-    duration_ms: integer("duration_ms"), // 执行耗时（毫秒）
-    memory_usage: integer("memory_usage"), // 内存使用（KB）
-    // 元数据
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => [
-    index("runtime_log_level_idx").on(table.log_level),
-    index("runtime_log_source_idx").on(table.source),
-    index("runtime_log_created_at_idx").on(table.created_at),
-  ]
-);
-
-// ==================== 系统监控 ====================
-
-// 监控问题记录
-export const monitorIssues = pgTable(
-  "monitor_issues",
-  {
-    id: serial().primaryKey(),
-    issue_type: varchar("issue_type", { length: 50 }).notNull(), // api_error/business_error/resource_overload/timeout/unknown
-    severity: varchar("severity", { length: 20 }).notNull().default("warning"), // info/warning/error/critical
-    module: varchar("module", { length: 100 }).notNull(), // 关联的系统模块
-    // 问题详情
-    title: varchar("title", { length: 500 }).notNull(),
-    description: text("description"),
-    error_details: jsonb("error_details"), // 错误详情对象
-    log_snippet: text("log_snippet"), // 日志片段
-    screenshot_url: varchar("screenshot_url", { length: 500 }), // 截图URL
-    // 环境信息
-    environment: jsonb("environment"), // 当前系统运行环境参数
-    // 复现步骤
-    reproduction_steps: jsonb("reproduction_steps"), // 复现步骤数组
-    // 统计信息
-    occurrence_count: integer("occurrence_count").default(1).notNull(), // 发生次数
-    first_occurred_at: timestamp("first_occurred_at", { withTimezone: true }).defaultNow().notNull(),
-    last_occurred_at: timestamp("last_occurred_at", { withTimezone: true }).defaultNow().notNull(),
-    // 处理状态
-    status: varchar("status", { length: 20 }).notNull().default("open"), // open/investigating/resolved/ignored
-    assignee: varchar("assignee", { length: 100 }),
-    resolution: text("resolution"),
-    resolved_at: timestamp("resolved_at", { withTimezone: true }),
-    // 元数据
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => [
-    index("monitor_issue_type_idx").on(table.issue_type),
-    index("monitor_severity_idx").on(table.severity),
-    index("monitor_module_idx").on(table.module),
-    index("monitor_status_idx").on(table.status),
-    index("monitor_occurred_at_idx").on(table.last_occurred_at),
-  ]
-);
-
-// 监控测试用例执行记录
-export const monitorTestRuns = pgTable(
-  "monitor_test_runs",
-  {
-    id: serial().primaryKey(),
-    test_case_id: varchar("test_case_id", { length: 100 }).notNull(),
-    test_name: varchar("test_name", { length: 200 }).notNull(),
-    test_type: varchar("test_type", { length: 50 }).notNull(), // normal/exception/boundary
-    test_module: varchar("test_module", { length: 100 }).notNull(),
-    status: varchar("status", { length: 20 }).notNull(), // passed/failed/skipped
-    // 执行详情
-    start_time: timestamp("start_time", { withTimezone: true }).notNull(),
-    end_time: timestamp("end_time", { withTimezone: true }),
-    duration_ms: integer("duration_ms"),
-    // 结果详情
-    result: jsonb("result"),
-    error_message: text("error_message"),
-    // 元数据
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => [
-    index("monitor_test_case_id_idx").on(table.test_case_id),
-    index("monitor_test_type_idx").on(table.test_type),
-    index("monitor_test_status_idx").on(table.status),
-    index("monitor_test_created_at_idx").on(table.created_at),
-  ]
-);
-
-// 系统健康检查记录
-export const healthChecks = pgTable(
-  "health_checks",
-  {
-    id: serial().primaryKey(),
-    check_type: varchar("check_type", { length: 50 }).notNull(), // api/resource/database/worker
-    check_name: varchar("check_name", { length: 200 }).notNull(),
-    status: varchar("status", { length: 20 }).notNull(), // healthy/unhealthy/degraded
-    // 检查详情
-    details: jsonb("details"),
-    response_time_ms: integer("response_time_ms"),
-    // 阈值相关
-    threshold_warning: jsonb("threshold_warning"), // 警告阈值
-    threshold_error: jsonb("threshold_error"), // 错误阈值
-    // 元数据
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => [
-    index("health_check_type_idx").on(table.check_type),
-    index("health_check_status_idx").on(table.status),
-    index("health_check_created_at_idx").on(table.created_at),
-  ]
-);
-
-// 资源使用记录
-export const resourceUsage = pgTable(
-  "resource_usage",
-  {
-    id: serial().primaryKey(),
-    // CPU
-    cpu_usage_percent: numeric("cpu_usage_percent"),
-    cpu_load_avg_1m: numeric("cpu_load_avg_1m"),
-    cpu_load_avg_5m: numeric("cpu_load_avg_5m"),
-    cpu_load_avg_15m: numeric("cpu_load_avg_15m"),
-    // 内存
-    memory_used_bytes: bigint("memory_used_bytes", { mode: "number" }),
-    memory_total_bytes: bigint("memory_total_bytes", { mode: "number" }),
-    memory_usage_percent: numeric("memory_usage_percent"),
-    // 磁盘
-    disk_used_bytes: bigint("disk_used_bytes", { mode: "number" }),
-    disk_total_bytes: bigint("disk_total_bytes", { mode: "number" }),
-    disk_usage_percent: numeric("disk_usage_percent"),
-    // 网络
-    network_in_bytes_per_sec: numeric("network_in_bytes_per_sec"),
-    network_out_bytes_per_sec: numeric("network_out_bytes_per_sec"),
-    // 进程
-    process_count: integer("process_count"),
-    active_connections: integer("active_connections"),
-    // 元数据
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => [
-    index("resource_usage_created_at_idx").on(table.created_at),
-  ]
-);
-
-// 告警推送记录
-export const monitorAlerts = pgTable(
-  "monitor_alerts",
-  {
-    id: serial().primaryKey(),
-    issue_id: integer("issue_id").references(() => monitorIssues.id),
-    alert_type: varchar("alert_type", { length: 50 }).notNull(), // instant/daily/weekly
-    alert_level: varchar("alert_level", { length: 20 }).notNull(), // info/warning/error/critical
-    // 推送目标
-    channels: jsonb("channels"), // 推送渠道数组
-    recipients: jsonb("recipients"), // 接收人数组
-    // 推送内容
-    title: varchar("title", { length: 500 }).notNull(),
-    content: text("content"),
-    // 推送结果
-    status: varchar("status", { length: 20 }).notNull().default("pending"), // pending/sent/failed
-    sent_at: timestamp("sent_at", { withTimezone: true }),
-    error_message: text("error_message"),
-    // 元数据
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => [
-    index("monitor_alert_issue_id_idx").on(table.issue_id),
-    index("monitor_alert_type_idx").on(table.alert_type),
-    index("monitor_alert_level_idx").on(table.alert_level),
-    index("monitor_alert_status_idx").on(table.status),
-    index("monitor_alert_created_at_idx").on(table.created_at),
-  ]
-);
-
-// 监控报告
-export const monitorReports = pgTable(
-  "monitor_reports",
-  {
-    id: serial().primaryKey(),
-    report_type: varchar("report_type", { length: 50 }).notNull(), // hourly/daily/weekly/custom
-    start_time: timestamp("start_time", { withTimezone: true }).notNull(),
-    end_time: timestamp("end_time", { withTimezone: true }).notNull(),
-    // 报告内容
-    summary: jsonb("summary"), // 摘要信息
-    issues_summary: jsonb("issues_summary"), // 问题汇总
-    test_results: jsonb("test_results"), // 测试结果
-    health_trends: jsonb("health_trends"), // 健康趋势
-    resource_trends: jsonb("resource_trends"), // 资源趋势
-    recommendations: jsonb("recommendations"), // 建议
-    // 报告文件
-    report_url: varchar("report_url", { length: 500 }),
-    // 元数据
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => [
-    index("monitor_report_type_idx").on(table.report_type),
-    index("monitor_report_time_idx").on(table.start_time, table.end_time),
-    index("monitor_report_created_at_idx").on(table.created_at),
   ]
 );

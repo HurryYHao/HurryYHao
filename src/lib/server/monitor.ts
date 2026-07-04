@@ -23,6 +23,9 @@ export interface LiveRoom {
   anchorId?: string;
   roomType?: 'normal' | 'intelligence';
   templateName?: string;
+  // 新增：从直播列表API获取的流地址
+  mainUrl?: string;
+  rawData?: Record<string, unknown>;
 }
 
 interface FindPageResult {
@@ -85,6 +88,10 @@ async function mapIntelligenceRoomFromApi(raw: Record<string, unknown>): Promise
     templateName = await getIntelligenceTemplateName(templateId);
   }
   
+  // 尝试从原始数据中提取流地址
+  const mainUrl = raw.mainUrl || raw.streamUrl || raw.playUrl || raw.liveUrl || 
+                 raw.flvUrl || raw.webrtcUrl || null;
+  
   return {
     id: roomId,
     roomId: roomId,
@@ -97,6 +104,9 @@ async function mapIntelligenceRoomFromApi(raw: Record<string, unknown>): Promise
     anchorId: raw.anchorId || raw.anchor_id ? String(raw.anchorId || raw.anchor_id) : undefined,
     roomType: 'intelligence',
     templateName,
+    // 存储原始数据中可能包含的流地址
+    rawData: raw,
+    mainUrl: mainUrl ? String(mainUrl) : undefined,
   };
 }
 
@@ -105,6 +115,10 @@ async function mapIntelligenceRoomFromApi(raw: Record<string, unknown>): Promise
  */
 function mapNormalRoomFromApi(raw: Record<string, unknown>): LiveRoom {
   const roomId = String(raw.roomId || raw.id || '');
+  
+  // 尝试从原始数据中提取流地址
+  const mainUrl = raw.mainUrl || raw.streamUrl || raw.playUrl || raw.liveUrl || 
+                 raw.flvUrl || raw.webrtcUrl || null;
   
   return {
     id: roomId,
@@ -117,6 +131,9 @@ function mapNormalRoomFromApi(raw: Record<string, unknown>): LiveRoom {
     online: raw.online ? String(raw.online) : undefined,
     anchorId: raw.anchorId || raw.anchor_id ? String(raw.anchorId || raw.anchor_id) : undefined,
     roomType: 'normal',
+    // 存储原始数据中可能包含的流地址
+    rawData: raw,
+    mainUrl: mainUrl ? String(mainUrl) : undefined,
   };
 }
 
@@ -265,12 +282,24 @@ export async function pollLiveStatus(): Promise<{
 async function startSession(room: LiveRoom): Promise<number> {
   const client = getSupabaseClient();
 
+  // 打印直播列表返回的原始数据，查看有哪些可用字段
+  if (room.rawData) {
+    console.log(`[Monitor] 直播列表原始数据(${room.roomId}):`, JSON.stringify(room.rawData, null, 2));
+  }
+
   // 获取 liveSpaceId（优先管理页API，无需LiveToken）
   let liveSpaceId: string | null = null;
   try {
     liveSpaceId = await getLiveSpaceId(room.roomId);
   } catch (err) {
     console.warn(`获取liveSpaceId失败(${room.roomId}):`, err instanceof Error ? err.message : err);
+  }
+
+  // 优先使用从直播列表获取的流地址
+  let trtcInfo: Record<string, unknown> = {};
+  if (room.mainUrl) {
+    console.log(`[Monitor] 使用直播列表中的流地址: ${room.mainUrl}`);
+    trtcInfo = { mainUrl: room.mainUrl };
   }
 
   // 创建数据库记录 - 状态直接设为 recording（表示正在录制数据）
@@ -289,6 +318,7 @@ async function startSession(room: LiveRoom): Promise<number> {
       last_analysis_time: now, // 初始化为开播时间，30分钟后触发首次分析
       room_type: room.roomType,
       template_name: room.templateName,
+      trtc_info: trtcInfo, // 保存从直播列表获取的流地址
     })
     .select('id')
     .single();
@@ -309,8 +339,8 @@ async function startSession(room: LiveRoom): Promise<number> {
     console.error(`首次数据抓取失败(${room.roomId}):`, err instanceof Error ? err.message : err);
   }
 
-  // 自动启动音频录制
-  autoStartRecording(room.roomId, sessionId, room.roomName).then(result => {
+  // 自动启动音频录制 - 传递可能从直播列表获取的流地址
+  autoStartRecording(room.roomId, sessionId, room.roomName, room.mainUrl).then(result => {
     if (result.success) {
       console.log(`[Monitor] 自动录制已启动: room=${room.roomId}, name=${room.roomName}`);
     } else {
@@ -668,7 +698,27 @@ export async function checkAndRunScheduledAnalysis(): Promise<Array<{
 
   const now = Date.now();
 
+  // 获取当前所有在直播的房间列表
+  let liveRooms: LiveRoom[] = [];
+  try {
+    const { rooms } = await getLiveList(1, 100);
+    liveRooms = rooms.filter(r => r.liveStatus === LIVE_STATUS.STARTING);
+  } catch (err) {
+    console.error(`[AutoRecording] 获取直播列表失败，将跳过状态验证:`, err);
+  }
+  const liveRoomIds = new Set(liveRooms.map(r => r.roomId));
+
   for (const session of recordingSessions) {
+    // 验证直播间是否还在开播状态（如果成功获取到了直播列表）
+    if (liveRoomIds.size > 0 && !liveRoomIds.has(session.room_id)) {
+      console.log(`[AutoRecording] 检测到直播间 ${session.room_id} 已不再开播状态，自动结束会话`);
+      resetRetryCount(session.room_id);
+      await endSession(session.id, session.room_id).catch(err => {
+        console.error(`[AutoRecording] 自动结束会话失败:`, err instanceof Error ? err.message : err);
+      });
+      continue;
+    }
+
     // 检查流是否已失效（连续多次录制失败→直播实际已结束但API延迟更新）
     if (isStreamDead(session.room_id)) {
       console.warn(`[AutoRecording] 流已失效(连续${3}次录制失败)，自动结束会话: room=${session.room_id}, sessionId=${session.id}`);

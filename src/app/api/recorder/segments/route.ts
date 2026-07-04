@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: false, error: '缺少 roomId' }, { status: 400 });
     }
 
-    const segments = getSegments(roomId, roomName);
+    const segments = await getSegments(roomId, roomName);
     return NextResponse.json({ success: true, data: segments });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

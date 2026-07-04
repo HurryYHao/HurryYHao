@@ -25,6 +25,8 @@ interface AudioSegment {
   mtime: string;
   transcription?: string;
   transcribing?: boolean;
+  transcribe_status?: string;
+  segmentSeq?: number;
 }
 
 interface ServerAudioRecorderProps {
@@ -70,6 +72,15 @@ export default function ServerAudioRecorder({ roomId, sessionId, roomName }: Ser
       const json = await res.json();
       if (json.success) {
         setSegments(json.data || []);
+        
+        // 更新转写结果映射
+        const newTranscriptionMap: Record<string, string> = {};
+        for (const seg of json.data || []) {
+          if (seg.transcription) {
+            newTranscriptionMap[seg.filename] = seg.transcription;
+          }
+        }
+        setTranscriptionMap(newTranscriptionMap);
       }
     } catch {
       // 静默
@@ -420,6 +431,16 @@ export default function ServerAudioRecorder({ roomId, sessionId, roomName }: Ser
                       <Badge variant="outline" className="text-[10px]">
                         {formatSize(seg.size)}
                       </Badge>
+                      {seg.transcribe_status && (
+                        <Badge 
+                          variant={seg.transcribe_status === 'success' ? 'default' : seg.transcribe_status === 'pending' ? 'outline' : 'destructive'} 
+                          className="text-[10px]"
+                        >
+                          {seg.transcribe_status === 'success' ? '转写完成' : 
+                           seg.transcribe_status === 'pending' ? '等待转写' : 
+                           seg.transcribe_status === 'failed' ? '转写失败' : seg.transcribe_status}
+                        </Badge>
+                      )}
                     </div>
                     <p className="text-xs text-muted-foreground truncate mt-0.5">
                       {seg.filename}
@@ -440,10 +461,10 @@ export default function ServerAudioRecorder({ roomId, sessionId, roomName }: Ser
                     variant="ghost"
                     className="h-7 w-7 shrink-0"
                     onClick={() => transcribeSegment(seg)}
-                    disabled={transcribingSegments.has(seg.filename)}
+                    disabled={transcribingSegments.has(seg.filename) || seg.transcribe_status === 'success'}
                     title="转写为文字"
                   >
-                    {transcribingSegments.has(seg.filename) ? (
+                    {transcribingSegments.has(seg.filename) || seg.transcribe_status === 'pending' ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
                       <FileText className="h-3.5 w-3.5" />

@@ -72,12 +72,7 @@ export default function TimelinePage() {
         const res = await fetch(`/api/timeline?session_id=${selectedSession}`);
         if (res.ok) {
           const data = await res.json();
-          // Mock data if empty for demonstration
-          if (!data.data.events || data.data.events.length === 0) {
-            setEvents(generateMockEvents());
-          } else {
-            setEvents(data.data.events);
-          }
+          setEvents(data.data.events || []);
           setMetrics(data.data.metrics || []);
         }
       } catch (error) {
@@ -89,19 +84,6 @@ export default function TimelinePage() {
     
     fetchTimelineData();
   }, [selectedSession]);
-
-  const generateMockEvents = (): TimelineEvent[] => {
-    const now = new Date();
-    return [
-      { id: 1, session_id: Number(selectedSession), timestamp: new Date(now.getTime() - 3600000).toISOString(), offset_seconds: 0, event_type: 'stream_start', content: '直播正式开始', metrics: { online: 120 }, source: 'system', importance: 'medium' },
-      { id: 2, session_id: Number(selectedSession), timestamp: new Date(now.getTime() - 3000000).toISOString(), offset_seconds: 600, event_type: 'online_peak', content: '在线人数突破 500 人峰值', metrics: { online: 520 }, source: 'chart', importance: 'high' },
-      { id: 3, session_id: Number(selectedSession), timestamp: new Date(now.getTime() - 2400000).toISOString(), offset_seconds: 1200, event_type: 'product_start', content: '开始讲解爆款商品 A', metrics: null, source: 'ai', importance: 'medium' },
-      { id: 4, session_id: Number(selectedSession), timestamp: new Date(now.getTime() - 2100000).toISOString(), offset_seconds: 1500, event_type: 'script_key_point', content: '主播话术：抛出价格锚点并强调限时权益', metrics: null, source: 'asr', importance: 'high' },
-      { id: 5, session_id: Number(selectedSession), timestamp: new Date(now.getTime() - 1800000).toISOString(), offset_seconds: 1800, event_type: 'payment_peak', content: '商品 A 迎来集中支付爆发', metrics: { paid_count: 45, amount: 8900 }, source: 'order', importance: 'high' },
-      { id: 6, session_id: Number(selectedSession), timestamp: new Date(now.getTime() - 1200000).toISOString(), offset_seconds: 2400, event_type: 'high_value_question', content: '评论区集中提问："适用人群是哪些？"', metrics: { count: 12 }, source: 'comment', importance: 'medium' },
-      { id: 7, session_id: Number(selectedSession), timestamp: new Date(now.getTime() - 900000).toISOString(), offset_seconds: 2700, event_type: 'alert_triggered', content: '转化预警：点击高但支付转化率大幅下降', metrics: { click: 230, pay: 2 }, source: 'ai', importance: 'high' },
-    ];
-  };
 
   const getEventIcon = (source: string, type: string) => {
     if (type.includes('peak') || source === 'chart') return <Activity className="w-4 h-4 text-blue-500" />;

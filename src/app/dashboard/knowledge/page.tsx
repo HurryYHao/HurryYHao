@@ -427,8 +427,8 @@ export default function KnowledgePage() {
           {/* Knowledge list */}
           <ScrollArea className="h-[600px]">
             <div className="space-y-2">
-              {filteredKnowledge.map(item => (
-                <Card key={item.id} className="hover:shadow-sm transition-shadow">
+              {filteredKnowledge.map((item, index) => (
+                <Card key={item.id || `knowledge-${index}`} className="hover:shadow-sm transition-shadow">
                   <CardContent className="py-3 px-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 min-w-0">

@@ -298,6 +298,215 @@ export function extractAudienceComments(records: Record<string, unknown>[]): Arr
   return comments;
 }
 
+function normalizeTimeLabel(baseTime: Date, label: string): Date {
+  const match = label.match(/(\d{1,2}):(\d{2})/);
+  if (!match) return new Date(baseTime);
+  const normalized = new Date(baseTime);
+  normalized.setHours(Number(match[1]), Number(match[2]), 0, 0);
+  return normalized;
+}
+
+async function upsertMinuteMetrics(
+  sessionId: number,
+  snapshotTime: Date,
+  chartData: Record<string, unknown>
+): Promise<void> {
+  const client = getSupabaseClient();
+  const xis = Array.isArray(chartData.xis) ? chartData.xis as string[] : [];
+  const onlineList = Array.isArray(chartData.onlineUserCntList) ? chartData.onlineUserCntList as number[] : [];
+  const commenterList = Array.isArray(chartData.commenterCntList) ? chartData.commenterCntList as number[] : [];
+  const clickList = Array.isArray(chartData.productClickCntList) ? chartData.productClickCntList as number[] : [];
+  const orderList = Array.isArray(chartData.transactionCntList) ? chartData.transactionCntList as number[] : [];
+  const payUserList = Array.isArray(chartData.payUserCntList) ? chartData.payUserCntList as number[] : [];
+  const amountList = Array.isArray(chartData.transactionAmountList) ? chartData.transactionAmountList as number[] : [];
+  const viewerList = Array.isArray(chartData.watcherCntList) ? chartData.watcherCntList as number[] : [];
+
+  for (let i = 0; i < xis.length; i++) {
+    const existing = await client
+      .from('live_metrics_minute')
+      .select('id')
+      .eq('session_id', sessionId)
+      .eq('minute_index', i)
+      .maybeSingle();
+
+    const payload = {
+      session_id: sessionId,
+      minute_index: i,
+      online_count: Number(onlineList[i] || 0),
+      comment_count: Number(commenterList[i] || 0),
+      click_count: Number(clickList[i] || 0),
+      order_count: Number(orderList[i] || 0),
+      paid_count: Number(payUserList[i] || 0),
+      paid_amount: Number(amountList[i] || 0),
+      viewer_count: Number(viewerList[i] || 0),
+      created_at: normalizeTimeLabel(snapshotTime, xis[i]).toISOString(),
+    };
+
+    if (existing.data?.id) {
+      await client
+        .from('live_metrics_minute')
+        .update(payload)
+        .eq('id', existing.data.id);
+    } else {
+      await client.from('live_metrics_minute').insert(payload);
+    }
+  }
+}
+
+async function upsertTimelineEvent(
+  sessionId: number,
+  event: {
+    timestamp: string;
+    offset_seconds: number;
+    event_type: string;
+    content: string;
+    metrics?: Record<string, unknown>;
+    source: string;
+    importance: 'low' | 'medium' | 'high';
+  }
+): Promise<void> {
+  const client = getSupabaseClient();
+  const existing = await client
+    .from('live_timeline_events')
+    .select('id')
+    .eq('session_id', sessionId)
+    .eq('timestamp', event.timestamp)
+    .eq('event_type', event.event_type)
+    .eq('source', event.source)
+    .maybeSingle();
+
+  const payload = {
+    session_id: sessionId,
+    timestamp: event.timestamp,
+    offset_seconds: event.offset_seconds,
+    event_type: event.event_type,
+    content: event.content,
+    metrics: event.metrics || null,
+    source: event.source,
+    importance: event.importance,
+  };
+
+  if (existing.data?.id) {
+    await client.from('live_timeline_events').update(payload).eq('id', existing.data.id);
+  } else {
+    await client.from('live_timeline_events').insert(payload);
+  }
+}
+
+async function generateTimelineFromSnapshot(
+  sessionId: number,
+  snapshotTime: Date,
+  analysisData: Record<string, unknown>,
+  chartData: Record<string, unknown>,
+  comments: Array<{ nickname: string; content: string; timestamp: string; isNewUser: boolean }>,
+  orderDetails: Record<string, unknown>[]
+): Promise<void> {
+  const baseTime = snapshotTime;
+  const xis = Array.isArray(chartData.xis) ? chartData.xis as string[] : [];
+  const onlineList = Array.isArray(chartData.onlineUserCntList) ? chartData.onlineUserCntList as number[] : [];
+  const commentList = Array.isArray(chartData.commenterCntList) ? chartData.commenterCntList as number[] : [];
+  const amountList = Array.isArray(chartData.transactionAmountList) ? chartData.transactionAmountList as number[] : [];
+
+  const startTime = xis.length > 0 ? normalizeTimeLabel(baseTime, xis[0]) : baseTime;
+  const snapshotOffsetSeconds = Math.max(0, Math.round((snapshotTime.getTime() - startTime.getTime()) / 1000));
+
+  await upsertTimelineEvent(sessionId, {
+    timestamp: snapshotTime.toISOString(),
+    offset_seconds: snapshotOffsetSeconds,
+    event_type: 'snapshot_captured',
+    content: `完成第 ${Number(analysisData.snapshotSeq || 0) || 0} 次数据快照抓取`,
+    metrics: {
+      watchers: Number(analysisData.watcherCnt || 0),
+      online: Number(analysisData.peakConcurrentViewers || 0),
+      comments: Number(analysisData.commentCnt || 0),
+      amount: Number(analysisData.transactionAmount || 0),
+    },
+    source: 'system',
+    importance: 'medium',
+  });
+
+  if (onlineList.length > 0 && xis.length > 0) {
+    const maxOnline = Math.max(...onlineList);
+    const maxIdx = onlineList.indexOf(maxOnline);
+    await upsertTimelineEvent(sessionId, {
+      timestamp: normalizeTimeLabel(baseTime, xis[maxIdx]).toISOString(),
+      offset_seconds: maxIdx * 60,
+      event_type: 'online_peak',
+      content: `在线人数达到峰值 ${maxOnline}`,
+      metrics: { online: maxOnline },
+      source: 'chart',
+      importance: 'high',
+    });
+  }
+
+  if (commentList.length > 0 && xis.length > 0) {
+    const maxComments = Math.max(...commentList);
+    const maxIdx = commentList.indexOf(maxComments);
+    if (maxComments > 0) {
+      await upsertTimelineEvent(sessionId, {
+        timestamp: normalizeTimeLabel(baseTime, xis[maxIdx]).toISOString(),
+        offset_seconds: maxIdx * 60,
+        event_type: 'comment_burst',
+        content: `评论互动达到高峰，评论人数 ${maxComments}`,
+        metrics: { commenters: maxComments },
+        source: 'comment',
+        importance: 'medium',
+      });
+    }
+  }
+
+  if (amountList.length > 0 && xis.length > 0) {
+    const maxAmount = Math.max(...amountList);
+    const maxIdx = amountList.indexOf(maxAmount);
+    if (maxAmount > 0) {
+      await upsertTimelineEvent(sessionId, {
+        timestamp: normalizeTimeLabel(baseTime, xis[maxIdx]).toISOString(),
+        offset_seconds: maxIdx * 60,
+        event_type: 'payment_peak',
+        content: `成交金额达到峰值 ¥${maxAmount}`,
+        metrics: { paid_amount: maxAmount },
+        source: 'order',
+        importance: 'high',
+      });
+    }
+  }
+
+  const questionComment = comments.find((comment) => /[?？]|怎么|多少钱|可以|适合|有没有|效果|物流|发货/.test(comment.content));
+  if (questionComment) {
+    const commentTime = questionComment.timestamp ? new Date(Number(questionComment.timestamp) || questionComment.timestamp) : snapshotTime;
+    await upsertTimelineEvent(sessionId, {
+      timestamp: commentTime.toISOString(),
+      offset_seconds: Math.max(0, Math.round((commentTime.getTime() - startTime.getTime()) / 1000)),
+      event_type: 'high_value_question',
+      content: `高价值评论问题：${questionComment.content.slice(0, 80)}`,
+      metrics: { nickname: questionComment.nickname },
+      source: 'comment',
+      importance: 'medium',
+    });
+  }
+
+  const topOrder = [...orderDetails]
+    .map((item) => ({
+      goodsName: String(item.goodsName || item.productName || ''),
+      paidCount: Number(item.paidCount || item.paid_count || 0),
+      payAmount: Number(item.payAmount || item.pay_amount || 0),
+    }))
+    .filter((item) => item.goodsName)
+    .sort((a, b) => (b.payAmount || b.paidCount) - (a.payAmount || a.paidCount))[0];
+
+  if (topOrder && (topOrder.payAmount > 0 || topOrder.paidCount > 0)) {
+    await upsertTimelineEvent(sessionId, {
+      timestamp: snapshotTime.toISOString(),
+      offset_seconds: snapshotOffsetSeconds,
+      event_type: 'product_hotspot',
+      content: `当前高表现商品：${topOrder.goodsName}`,
+      metrics: { paid_count: topOrder.paidCount, pay_amount: topOrder.payAmount },
+      source: 'order',
+      importance: 'medium',
+    });
+  }
+}
+
 // ==================== 综合抓取入口 ====================
 
 /**
@@ -310,6 +519,7 @@ export async function fetchAllSnapshotData(
   seq: number
 ): Promise<void> {
   const client = getSupabaseClient();
+  const snapshotTime = new Date();
 
   // 获取 liveSpaceId（管理页API，无需 LiveToken）
   const liveSpaceId = await getLiveSpaceId(roomId);
@@ -397,7 +607,7 @@ export async function fetchAllSnapshotData(
   const { error } = await client.from('snapshot_data').insert({
     session_id: sessionId,
     snapshot_seq: seq,
-    snapshot_time: new Date().toISOString(),
+    snapshot_time: snapshotTime.toISOString(),
     watcher_cnt: watcherCnt,
     comment_cnt: commentCnt,
     online_user_cnt: peakConcurrent,
@@ -421,49 +631,17 @@ export async function fetchAllSnapshotData(
 
   if (error) throw new Error(`写入快照数据失败: ${error.message}`);
 
-  // 写入商品明细表（从orderDetails提取）
-  if (orderDetails.records && orderDetails.records.length > 0) {
-    const goodsMetrics = orderDetails.records.map((order: any) => {
-      const clickCount = Number(order.clickCount || order.click_count || 0);
-      const orderCount = Number(order.orderCount || order.order_count || 0);
-      const paidCount = Number(order.paidCount || order.paid_count || 0);
-      const unpaidCount = Number(order.unpaidCount || order.unpaid_count || 0);
-      const payAmount = Number(order.payAmount || order.pay_amount || 0);
-      
-      return {
-        session_id: sessionId,
-        goods_id: String(order.goodsId || order.goods_id || ''),
-        goods_name: String(order.goodsName || order.goods_name || ''),
-        click_count: clickCount,
-        order_count: orderCount,
-        paid_count: paidCount,
-        unpaid_count: unpaidCount,
-        pay_amount: payAmount,
-        click_to_order_rate: clickCount > 0 ? (orderCount / clickCount) * 100 : 0,
-        order_to_pay_rate: orderCount > 0 ? (paidCount / orderCount) * 100 : 0,
-        click_to_pay_rate: clickCount > 0 ? (paidCount / clickCount) * 100 : 0,
-        created_at: new Date().toISOString(),
-      };
-    });
+  analysisResult.snapshotSeq = seq;
 
-    const { error: goodsError } = await client.from('live_goods_metrics').insert(goodsMetrics);
-    if (goodsError) {
-      console.error('[Fetcher] 写入商品明细失败:', goodsError.message);
-      // 不抛出错误，允许继续执行
-    } else {
-      console.info(`[Fetcher] 写入 ${goodsMetrics.length} 条商品明细数据`);
-    }
-  }
-
-  // 提取并保存时间轴事件（从chartData中提取关键时间点）
-  // 获取session的开始时间
-  const { data: sessionData } = await client
-    .from('live_sessions')
-    .select('start_time')
-    .eq('id', sessionId)
-    .maybeSingle();
-
-  await extractAndSaveTimelineEvents(sessionId, chartData, sessionData?.start_time || null);
+  await upsertMinuteMetrics(sessionId, snapshotTime, chartData as Record<string, unknown>);
+  await generateTimelineFromSnapshot(
+    sessionId,
+    snapshotTime,
+    analysisResult,
+    chartData as Record<string, unknown>,
+    audienceComments,
+    orderDetails.records
+  );
 
   console.info(`[Fetcher] 快照 #${seq} 写入成功: ${audienceComments.length}条评论, ${orderDetails.records.length}条订单`);
 }
@@ -653,132 +831,6 @@ export async function fetchLiveSpaceOptions(roomId: string): Promise<Array<{ id:
     method: 'GET',
   });
   return result.data || [];
-}
-
-// ==================== 时间轴事件提取 ====================
-
-/**
- * 从分钟级图表数据中提取关键事件并保存到live_timeline_events表
- */
-async function extractAndSaveTimelineEvents(
-  sessionId: number,
-  chartData: any,
-  startTime: string | null
-) {
-  if (!chartData || !startTime) {
-    console.info('[Timeline] 无图表数据或开始时间，跳过事件提取');
-    return;
-  }
-
-  const client = getSupabaseClient();
-  const events: Array<{
-    session_id: number;
-    timestamp: string;
-    offset_seconds: number;
-    event_type: string;
-    content: string;
-    metrics: Record<string, number>;
-    source: string;
-    importance: string;
-  }> = [];
-
-  // 解析开始时间
-  const startTs = new Date(startTime);
-  
-  // 提取在线人数峰值事件
-  if (chartData.online && Array.isArray(chartData.online)) {
-    const onlineData = chartData.online;
-    const peakIndex = onlineData.reduce((maxIdx: number, val: number, idx: number, arr: number[]) => 
-      val > arr[maxIdx] ? idx : maxIdx, 0);
-    const peakValue = onlineData[peakIndex];
-    
-    if (peakValue > 50) {  // 只记录超过50人的峰值
-      const peakTime = new Date(startTs.getTime() + peakIndex * 60000);
-      events.push({
-        session_id: sessionId,
-        timestamp: peakTime.toISOString(),
-        offset_seconds: peakIndex * 60,
-        event_type: 'online_peak',
-        content: `在线人数达到峰值 ${peakValue} 人`,
-        metrics: { online: peakValue },
-        source: 'chart',
-        importance: peakValue > 200 ? 'high' : 'medium',
-      });
-    }
-  }
-
-  // 提取评论高峰事件
-  if (chartData.commentUv && Array.isArray(chartData.commentUv)) {
-    const commentData = chartData.commentUv;
-    const peakIndex = commentData.reduce((maxIdx: number, val: number, idx: number, arr: number[]) => 
-      val > arr[maxIdx] ? idx : maxIdx, 0);
-    const peakValue = commentData[peakIndex];
-    
-    if (peakValue > 20) {  // 只记录超过20人评论的高峰
-      const peakTime = new Date(startTs.getTime() + peakIndex * 60000);
-      events.push({
-        session_id: sessionId,
-        timestamp: peakTime.toISOString(),
-        offset_seconds: peakIndex * 60,
-        event_type: 'interaction_peak',
-        content: `互动高峰，评论人数 ${peakValue} 人`,
-        metrics: { comments: peakValue },
-        source: 'chart',
-        importance: peakValue > 100 ? 'high' : 'medium',
-      });
-    }
-  }
-
-  // 提取支付爆发事件
-  if (chartData.payUv && Array.isArray(chartData.payUv)) {
-    const payData = chartData.payUv;
-    // 找支付人数增长率最高的时间点
-    let maxGrowthIdx = 0;
-    let maxGrowth = 0;
-    for (let i = 1; i < payData.length; i++) {
-      const growth = payData[i] - payData[i - 1];
-      if (growth > maxGrowth) {
-        maxGrowth = growth;
-        maxGrowthIdx = i;
-      }
-    }
-    
-    if (maxGrowth > 3) {  // 只记录增长超过3人的爆发
-      const peakTime = new Date(startTs.getTime() + maxGrowthIdx * 60000);
-      events.push({
-        session_id: sessionId,
-        timestamp: peakTime.toISOString(),
-        offset_seconds: maxGrowthIdx * 60,
-        event_type: 'payment_burst',
-        content: `支付爆发，新增支付人数 ${maxGrowth} 人`,
-        metrics: { pay_users: payData[maxGrowthIdx], growth: maxGrowth },
-        source: 'chart',
-        importance: maxGrowth > 10 ? 'high' : 'medium',
-      });
-    }
-  }
-
-  // 添加开播事件（offset_seconds = 0）
-  events.unshift({
-    session_id: sessionId,
-    timestamp: startTs.toISOString(),
-    offset_seconds: 0,
-    event_type: 'stream_start',
-    content: '直播正式开始',
-    metrics: {},
-    source: 'system',
-    importance: 'medium',
-  });
-
-  // 保存事件到数据库
-  if (events.length > 1) {  // 至少有1个关键事件（开播事件不算）
-    const { error } = await client.from('live_timeline_events').insert(events);
-    if (error) {
-      console.error('[Timeline] 保存事件失败:', error.message);
-    } else {
-      console.info(`[Timeline] 保存 ${events.length} 个关键事件（在线峰值、互动高峰、支付爆发等）`);
-    }
-  }
 }
 
 /**

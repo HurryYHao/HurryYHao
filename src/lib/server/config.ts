@@ -62,6 +62,23 @@ export const CONFIG = {
     },
   },
 
+  // 腾讯云 ASR 配置
+  tencentCloud: {
+    secretId: process.env.TENCENTCLOUD_SECRET_ID || '',
+    secretKey: process.env.TENCENTCLOUD_SECRET_KEY || '',
+    region: process.env.TENCENTCLOUD_REGION || 'ap-guangzhou',
+    appId: process.env.TENCENTCLOUD_APP_ID || '',
+  },
+
+  // 腾讯云 COS 配置
+  cos: {
+    secretId: process.env.COS_SECRET_ID || process.env.TENCENTCLOUD_SECRET_ID || '',
+    secretKey: process.env.COS_SECRET_KEY || process.env.TENCENTCLOUD_SECRET_KEY || '',
+    region: process.env.COS_REGION || process.env.TENCENTCLOUD_REGION || 'ap-guangzhou',
+    bucket: process.env.COS_BUCKET || '',
+    prefix: process.env.COS_PREFIX || 'ai-live-analysis',
+  },
+
   // 管理页固定请求头
   adminHeaders: {
     Authorization: 'bGFtcF93ZWJfcHJvOmxhbXBfd2ViX3Byb19zZWNyZXQ=',

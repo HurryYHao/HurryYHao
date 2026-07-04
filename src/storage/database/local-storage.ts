@@ -384,113 +384,7 @@ interface ProductBattleCard {
   updated_at: string;
 }
 
-interface SystemOperationLog {
-  id: number;
-  operation_type: string;
-  user_id?: string;
-  username?: string;
-  resource_type?: string;
-  resource_id?: string;
-  action?: string;
-  description?: string;
-  old_value?: any;
-  new_value?: any;
-  ip_address?: string;
-  user_agent?: string;
-  status: string;
-  error_message?: string;
-  created_at: string;
-}
-
-interface RuntimeLog {
-  id: number;
-  log_level: string;
-  log_type: string;
-  source: string;
-  message: string;
-  context?: any;
-  error_stack?: string;
-  session_id?: number;
-  job_id?: number;
-  duration_ms?: number;
-  memory_usage?: number;
-  created_at: string;
-}
-
-// 监控问题记录
-interface MonitorIssue {
-  id: number;
-  issue_type: string;
-  severity: string;
-  module: string;
-  title: string;
-  description?: string;
-  error_details?: any;
-  log_snippet?: string;
-  screenshot_url?: string;
-  environment?: any;
-  reproduction_steps?: any;
-  occurrence_count: number;
-  first_occurred_at: string;
-  last_occurred_at: string;
-  status: string;
-  assignee?: string;
-  resolution?: string;
-  resolved_at?: string;
-  created_at: string;
-  updated_at: string;
-}
-
-// 监控测试用例执行记录
-interface MonitorTestRun {
-  id: number;
-  test_case_id: string;
-  test_name: string;
-  test_type: string;
-  test_module: string;
-  status: string;
-  start_time: string;
-  end_time?: string;
-  duration_ms?: number;
-  result?: any;
-  error_message?: string;
-  created_at: string;
-}
-
-// 系统健康检查记录
-interface HealthCheck {
-  id: number;
-  check_type: string;
-  check_name: string;
-  status: string;
-  details?: any;
-  response_time_ms?: number;
-  threshold_warning?: any;
-  threshold_error?: any;
-  created_at: string;
-}
-
-// 资源使用记录
-interface ResourceUsage {
-  id: number;
-  cpu_usage_percent?: string;
-  cpu_load_avg_1m?: string;
-  cpu_load_avg_5m?: string;
-  cpu_load_avg_15m?: string;
-  memory_used_bytes?: bigint;
-  memory_total_bytes?: bigint;
-  memory_usage_percent?: string;
-  disk_used_bytes?: bigint;
-  disk_total_bytes?: bigint;
-  disk_usage_percent?: string;
-  network_in_bytes_per_sec?: string;
-  network_out_bytes_per_sec?: string;
-  process_count?: number;
-  active_connections?: number;
-  created_at: string;
-}
-
-// 告警推送记录
+// 告警推送记录（保留基础告警接口，用于直播预警）
 interface MonitorAlert {
   id: number;
   issue_id?: number;
@@ -503,22 +397,6 @@ interface MonitorAlert {
   status: string;
   sent_at?: string;
   error_message?: string;
-  created_at: string;
-}
-
-// 监控报告
-interface MonitorReport {
-  id: number;
-  report_type: string;
-  start_time: string;
-  end_time: string;
-  summary?: any;
-  issues_summary?: any;
-  test_results?: any;
-  health_trends?: any;
-  resource_trends?: any;
-  recommendations?: any;
-  report_url?: string;
   created_at: string;
 }
 
@@ -548,15 +426,7 @@ const storage = {
   promptVersions: [] as PromptVersion[],
   workerHeartbeats: [] as WorkerHeartbeat[],
   productBattleCards: [] as ProductBattleCard[],
-  systemOperationLogs: [] as SystemOperationLog[],
-  runtimeLogs: [] as RuntimeLog[],
-  // 监控系统表
-  monitorIssues: [] as MonitorIssue[],
-  monitorTestRuns: [] as MonitorTestRun[],
-  healthChecks: [] as HealthCheck[],
-  resourceUsages: [] as ResourceUsage[],
-  monitorAlerts: [] as MonitorAlert[],
-  monitorReports: [] as MonitorReport[],
+  monitorAlerts: [] as MonitorAlert[], // 保留基础告警功能，用于直播预警
   nextIds: {
     liveSessions: 1,
     snapshotData: 1,
@@ -582,14 +452,7 @@ const storage = {
     promptVersions: 1,
     workerHeartbeats: 1,
     productBattleCards: 1,
-    systemOperationLogs: 1,
-    runtimeLogs: 1,
-    monitorIssues: 1,
-    monitorTestRuns: 1,
-    healthChecks: 1,
-    resourceUsages: 1,
     monitorAlerts: 1,
-    monitorReports: 1,
   }
 };
 
