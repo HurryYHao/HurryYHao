@@ -32,11 +32,7 @@ export async function GET(request: Request) {
       const productStats = {
         totalSessions: new Set(),
         totalClicks: 0,
-        totalOrders: 0,
-        totalPaid: 0,
-        totalAmount: 0,
-        orderedUsers: new Set(),
-        paidUsers: new Set()
+        userOrders: new Map()  // userId -> { hasOrdered, hasPaid, totalPayPrice }
       };
 
       for (const snapshot of (snapshotData || [])) {
@@ -51,7 +47,7 @@ export async function GET(request: Request) {
               // This snapshot contains the product
               productStats.totalSessions.add(snapshot.session_id);
               
-              // 从订单明细数据聚合统计
+              // 记录用户订单数据
               const userId = orderItem.userId || orderItem.liveMemberId || '';
               const clickCount = Number(orderItem.clickCount || 0);
               const buyCount = Number(orderItem.buyCount || 0);
@@ -60,17 +56,24 @@ export async function GET(request: Request) {
               
               productStats.totalClicks += clickCount;
               
-              // 下单人数统计
-              if (buyCount > 0 && userId && !productStats.orderedUsers.has(userId)) {
-                productStats.orderedUsers.add(userId);
-                productStats.totalOrders += 1;
-              }
-              
-              // 支付人数和销售额统计
-              if (payStatus === 'SUCCESS' && userId && !productStats.paidUsers.has(userId)) {
-                productStats.paidUsers.add(userId);
-                productStats.totalPaid += 1;
-                productStats.totalAmount += payPrice;
+              // 更新用户订单数据
+              if (userId) {
+                const userOrder = productStats.userOrders.get(userId) || {
+                  hasOrdered: false,
+                  hasPaid: false,
+                  totalPayPrice: 0
+                };
+                
+                if (buyCount > 0) {
+                  userOrder.hasOrdered = true;
+                }
+                
+                if (payStatus === 'SUCCESS') {
+                  userOrder.hasPaid = true;
+                  userOrder.totalPayPrice += payPrice;
+                }
+                
+                productStats.userOrders.set(userId, userOrder);
               }
               
               productHistory.push({
@@ -93,10 +96,22 @@ export async function GET(request: Request) {
       }
 
       if (productHistory.length > 0) {
+        // 从用户订单数据计算最终统计
+        let totalOrders = 0;
+        let totalPaid = 0;
+        let totalAmount = 0;
+        
+        productStats.userOrders.forEach((userOrder) => {
+          if (userOrder.hasOrdered) {
+            totalOrders += 1;
+            if (userOrder.hasPaid) {
+              totalPaid += 1;
+              totalAmount += userOrder.totalPayPrice;
+            }
+          }
+        });
+        
         const totalClicks = productStats.totalClicks;
-        const totalOrders = productStats.totalOrders;
-        const totalPaid = productStats.totalPaid;
-        const totalAmount = productStats.totalAmount;
         const totalSessions = productStats.totalSessions.size;
         
         const avgClickToOrder = totalClicks > 0 ? (totalOrders / totalClicks) * 100 : 0;
@@ -188,9 +203,8 @@ export async function GET(request: Request) {
               total_orders: 0,
               total_paid: 0,
               total_amount: 0,
-              // 跟踪已下单/已支付的用户ID，避免重复统计
-              orderedUsers: new Set(),
-              paidUsers: new Set()
+              // 用户订单数据Map，用于最终统计
+              userOrders: new Map()  // userId -> { hasOrdered, hasPaid, totalPayPrice }
             });
           }
           
@@ -206,20 +220,21 @@ export async function GET(request: Request) {
           product.sessions.add(snapshot.session_id);
           product.total_clicks += clickCount;
           
-          // 下单人数统计：buyCount > 0 的用户（去重）
-          if (buyCount > 0 && userId && !product.orderedUsers.has(userId)) {
-            console.log('[Products API] 商品', itemName.substring(0, 20), '有下单用户:', userId, 'buyCount:', buyCount);
-            product.orderedUsers.add(userId);
-            product.total_orders += 1;
+          // 收集用户订单数据
+          if (!product.userOrders.has(userId)) {
+            product.userOrders.set(userId, {
+              orderRecords: []  // 记录该用户对该商品的所有订单明细
+            });
           }
           
-          // 支付人数和销售额统计：payStatus === 'SUCCESS' 的用户（去重）
-          if (payStatus === 'SUCCESS' && userId && !product.paidUsers.has(userId)) {
-            console.log('[Products API] 商品', itemName.substring(0, 20), '有支付用户:', userId, 'payPrice:', payPrice);
-            product.paidUsers.add(userId);
-            product.total_paid += 1;
-            product.total_amount += payPrice;
-          }
+          const userOrder = product.userOrders.get(userId);
+          
+          // 记录每条订单明细的详细信息
+          userOrder.orderRecords.push({
+            buyCount: buyCount,
+            payStatus: payStatus,
+            payPrice: payPrice
+          });
         }
       } catch (parseError) {
         // Skip invalid JSON
@@ -228,25 +243,66 @@ export async function GET(request: Request) {
     }
     
     console.log('[Products API] 聚合完成，商品数量:', productAggregation.size);
-    const sampleProduct = Array.from(productAggregation.values())[0];
-    if (sampleProduct) {
-      console.log('[Products API] 第一个商品聚合结果:', {
-        goods_name: sampleProduct.goods_name.substring(0, 30),
-        total_clicks: sampleProduct.total_clicks,
-        total_orders: sampleProduct.total_orders,
-        total_paid: sampleProduct.total_paid,
-        total_amount: sampleProduct.total_amount,
-        orderedUsers_size: sampleProduct.orderedUsers.size,
-        paidUsers_size: sampleProduct.paidUsers.size
+    
+    // 统计用户订单数据，计算最终的下单人数和支付人数
+    productAggregation.forEach((product: any, goodsName: string) => {
+      let totalOrders = 0;
+      let totalPaid = 0;
+      let totalAmount = 0;
+      
+      product.userOrders.forEach((userOrder: any, userId: string) => {
+        // 分析该用户对该商品的所有订单记录
+        const records = userOrder.orderRecords || [];
+        
+        // 检查是否有下单记录（buyCount>0）
+        const hasOrderedRecord = records.some((r: any) => r.buyCount > 0);
+        
+        // 检查是否有下单但未支付的记录（buyCount>0且payStatus!='SUCCESS')
+        const hasUnpaidOrder = records.some((r: any) => r.buyCount > 0 && r.payStatus !== 'SUCCESS');
+        
+        // 检查是否有支付成功的记录
+        const hasPaidRecord = records.some((r: any) => r.payStatus === 'SUCCESS');
+        
+        // 下单人数 = 有buyCount>0的用户
+        if (hasOrderedRecord) {
+          totalOrders += 1;
+          
+          // 支付人数 = 有payStatus='SUCCESS'的用户，且没有"下单但未支付"的记录
+          // 关键逻辑：如果用户有buyCount>0且payStatus='NOTPAY'的订单，说明他下单了但还没支付成功
+          if (hasPaidRecord && !hasUnpaidOrder) {
+            totalPaid += 1;
+            // 计算支付金额
+            records.forEach((r: any) => {
+              if (r.payStatus === 'SUCCESS') {
+                totalAmount += r.payPrice;
+              }
+            });
+          }
+        }
       });
-    }
+      
+      // 更新统计数据
+      product.total_orders = totalOrders;
+      product.total_paid = totalPaid;
+      product.total_amount = totalAmount;
+      
+      console.log('[Products API] 商品', goodsName.substring(0, 30), '统计结果:', {
+        下单人数: totalOrders,
+        支付人数: totalPaid,
+        销售额: totalAmount,
+        下单支付转化率: (totalOrders > 0 ? (totalPaid / totalOrders * 100).toFixed(1) : 0) + '%'
+      });
+      
+      // 清理临时数据
+      delete product.userOrders;
+      delete product.orderedUsers;
+      delete product.paidUsers;
+    });
 
     // Convert Map to array and calculate rates
     const result = Array.from(productAggregation.values()).map((product: any) => {
       product.session_count = product.sessions.size;
       delete product.sessions;
-      delete product.orderedUsers; // 清理临时字段
-      delete product.paidUsers; // 清理临时字段
       product.click_to_pay_rate = product.total_clicks > 0 
         ? ((product.total_paid / product.total_clicks) * 100).toFixed(2) 
         : '0.00';

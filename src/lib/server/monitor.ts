@@ -519,7 +519,8 @@ async function generateProductBattleCard(goodsName: string): Promise<void> {
           }
           
           // 支付人数和销售额统计（去重）
-          if (payStatus === 'SUCCESS' && userId && !productStats.paidUsers.has(userId)) {
+          // 关键修复：只有下单且支付的用户才算支付成功
+          if (buyCount > 0 && payStatus === 'SUCCESS' && userId && !productStats.paidUsers.has(userId)) {
             productStats.paidUsers.add(userId);
             productStats.totalPaid += 1;
             productStats.totalAmount += payPrice;
