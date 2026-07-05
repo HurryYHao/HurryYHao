@@ -13,8 +13,29 @@ import { asrClient } from './asr-client';
 export async function transcribeAudio(audioPath: string, sessionId: number, segmentSeq: number): Promise<string> {
   console.log(`[TranscribeWorker] 开始转写: session=${sessionId}, seg=${segmentSeq}, path=${audioPath}`);
 
+  const db = getSupabaseClient();
+  
+  // 幂等检查：如果已转写成功，跳过
+  const { data: existingSegment } = await db
+    .from('recording_segments')
+    .select('transcribe_status')
+    .eq('session_id', sessionId)
+    .eq('segment_seq', segmentSeq)
+    .single();
+  
+  if (existingSegment && (existingSegment.transcribeStatus ?? existingSegment.transcribe_status) === 'success') {
+    console.log(`[TranscribeWorker] 片段已转写，跳过: session=${sessionId}, seg=${segmentSeq}`);
+    // 返回已保存的转写文本
+    const { data: snapshot } = await db
+      .from('snapshot_data')
+      .select('transcription')
+      .eq('session_id', sessionId)
+      .eq('snapshot_seq', segmentSeq)
+      .single();
+    return (snapshot?.transcription ?? snapshot?.transcription) || '';
+  }
+
   if (!fs.existsSync(audioPath)) {
-    const db = getSupabaseClient();
     await db.from('recording_segments')
       .update({ transcribe_status: 'failed', error_message: '文件不存在' })
       .eq('session_id', sessionId)
@@ -28,8 +49,6 @@ export async function transcribeAudio(audioPath: string, sessionId: number, segm
   console.log(`[TranscribeWorker] ASR 转写成功: ${text.length} 字符`);
 
   // 保存到数据库
-  const db = getSupabaseClient();
-  
   // 更新 snapshot_data 转写结果
   await db
     .from('snapshot_data')

@@ -61,6 +61,12 @@ function parseCaptcha(code: string): string {
 const TOKEN_KEY = 'xinyun_admin_token';
 const LIVE_TOKEN_PREFIX = 'live_token_';
 
+// 登录退避机制
+let loginFailureCount = 0;
+let loginBackoffUntil = 0; // Unix timestamp ms，在此时间之前不尝试登录
+const LOGIN_MAX_BACKOFF_MS = 30 * 60 * 1000; // 最长退避 30 分钟
+const LOGIN_BASE_BACKOFF_MS = 60 * 1000; // 基础退避 1 分钟
+
 /**
  * 从数据库获取存储的 Token
  */
@@ -445,6 +451,12 @@ const memoryTokenCache = new Map<string, TokenData>();
  * 完整登录流程（含验证码重试）
  */
 export async function login(force: boolean = false, verbose: boolean = true): Promise<LoginResult> {
+  // 退避检查：如果还在退避期，直接报错
+  if (!force && Date.now() < loginBackoffUntil) {
+    const remainSec = Math.ceil((loginBackoffUntil - Date.now()) / 1000);
+    throw new Error(`登录退避中，${remainSec}秒后可重试（连续失败${loginFailureCount}次）`);
+  }
+
   // 如果非强制，先检查缓存
   if (!force) {
     const cached = memoryTokenCache.get('admin');
@@ -492,12 +504,22 @@ export async function login(force: boolean = false, verbose: boolean = true): Pr
         expiresAt: loginResult.expiresAt,
       });
 
+      // 登录成功，重置退避
+      loginFailureCount = 0;
+      loginBackoffUntil = 0;
+
       return loginResult;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
       if (verbose) console.error(`[Auth] 登录尝试 ${attempt}/${CONFIG.loginRetryMax} 失败:`, lastError.message);
     }
   }
+
+  // 登录全部失败，增加退避
+  loginFailureCount++;
+  const backoffMs = Math.min(LOGIN_BASE_BACKOFF_MS * loginFailureCount, LOGIN_MAX_BACKOFF_MS);
+  loginBackoffUntil = Date.now() + backoffMs;
+  console.warn(`[Auth] 登录连续失败${loginFailureCount}次，退避${Math.round(backoffMs / 1000)}秒`);
 
   throw new Error(`登录失败（重试${CONFIG.loginRetryMax}次）: ${lastError?.message}`);
 }

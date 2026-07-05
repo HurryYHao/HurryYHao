@@ -677,20 +677,45 @@ export class MemoryManager {
     return `${provider}:${modelName}`;
   }
 
+  // 安全解析 text 字段为数组：text 字段可能是 JSON 字符串（数组/对象）或 null
+  private safeParseArray(value: unknown): string[] {
+    if (Array.isArray(value)) return value;
+    if (value == null || value === '') return [];
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        if (Array.isArray(parsed)) return parsed;
+        // 如果解析结果是对象（如 {}），返回空数组
+        return [];
+      } catch {
+        // 如果不是有效 JSON，按单个字符串返回
+        return [value];
+      }
+    }
+    return [];
+  }
+
   formatMemoryForPrompt(context: Awaited<ReturnType<MemoryManager['getContextForAnalysis']>>): string {
     let prompt = '';
     
     if (context.anchorMemory) {
+      const strengths = this.safeParseArray(context.anchorMemory.strengths);
+      const improvementAreas = this.safeParseArray(context.anchorMemory.improvement_areas);
+      const productSpecialties = this.safeParseArray(context.anchorMemory.product_specialties);
+      
       prompt += `## 主播历史画像\n`;
       prompt += `- 主播: ${context.anchorMemory.anchor_name}\n`;
       if (context.anchorMemory.historical_summary) {
         prompt += `- 历史总结: ${context.anchorMemory.historical_summary}\n`;
       }
-      if (context.anchorMemory.strengths && context.anchorMemory.strengths.length > 0) {
-        prompt += `- 优势: ${context.anchorMemory.strengths.join(', ')}\n`;
+      if (strengths.length > 0) {
+        prompt += `- 优势: ${strengths.join(', ')}\n`;
       }
-      if (context.anchorMemory.improvement_areas && context.anchorMemory.improvement_areas.length > 0) {
-        prompt += `- 待改进: ${context.anchorMemory.improvement_areas.join(', ')}\n`;
+      if (improvementAreas.length > 0) {
+        prompt += `- 待改进: ${improvementAreas.join(', ')}\n`;
+      }
+      if (productSpecialties.length > 0) {
+        prompt += `- 商品专长: ${productSpecialties.join(', ')}\n`;
       }
       prompt += '\n';
     }
@@ -698,12 +723,13 @@ export class MemoryManager {
     if (context.productMemories.length > 0) {
       prompt += `## 相关商品历史表现\n`;
       for (const product of context.productMemories) {
+        const optimalPitches = this.safeParseArray(product.optimal_pitches);
         prompt += `### ${product.goods_name}\n`;
         if (product.performance_summary) {
           prompt += `- 表现总结: ${product.performance_summary}\n`;
         }
-        if (product.optimal_pitches && product.optimal_pitches.length > 0) {
-          prompt += `- 有效话术: ${product.optimal_pitches.slice(0, 3).join('; ')}\n`;
+        if (optimalPitches.length > 0) {
+          prompt += `- 有效话术: ${optimalPitches.slice(0, 3).join('; ')}\n`;
         }
         prompt += '\n';
       }
@@ -712,14 +738,17 @@ export class MemoryManager {
     if (context.recentSessionMemories.length > 0) {
       prompt += `## 近期直播经验\n`;
       for (const session of context.recentSessionMemories) {
-        if (session.key_insights && session.key_insights.length > 0) {
-          prompt += `- 关键洞察: ${session.key_insights.slice(0, 2).join('; ')}\n`;
+        const keyInsights = this.safeParseArray(session.key_insights);
+        const whatWorked = this.safeParseArray(session.what_worked);
+        const newLearnings = this.safeParseArray(session.new_learnings);
+        if (keyInsights.length > 0) {
+          prompt += `- 关键洞察: ${keyInsights.slice(0, 2).join('; ')}\n`;
         }
-        if (session.what_worked && session.what_worked.length > 0) {
-          prompt += `- 有效做法: ${session.what_worked.slice(0, 2).join('; ')}\n`;
+        if (whatWorked.length > 0) {
+          prompt += `- 有效做法: ${whatWorked.slice(0, 2).join('; ')}\n`;
         }
-        if (session.new_learnings && session.new_learnings.length > 0) {
-          prompt += `- 新经验: ${session.new_learnings.slice(0, 2).join('; ')}\n`;
+        if (newLearnings.length > 0) {
+          prompt += `- 新经验: ${newLearnings.slice(0, 2).join('; ')}\n`;
         }
       }
       prompt += '\n';

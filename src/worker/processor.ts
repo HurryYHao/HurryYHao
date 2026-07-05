@@ -11,6 +11,7 @@ export class WorkerProcessor {
   private analysisTimer: NodeJS.Timeout | null = null;
   private monitorTickRunning = false;
   private analysisTickRunning = false;
+  private _backoffWarned = false;
 
   async start() {
     if (this.isRunning) return;
@@ -72,8 +73,17 @@ export class WorkerProcessor {
           `[WorkerProcessor] Monitor tick completed: new=${result.newLiveRooms.length}, ended=${result.endedRooms.length}`
         );
       }
-    } catch (error) {
-      console.error('[WorkerProcessor] Monitor tick failed:', error);
+    } catch (error: any) {
+      // 登录退避期间只打印一次警告，不刷屏
+      if (error?.message?.includes('登录退避中')) {
+        if (!this._backoffWarned) {
+          console.warn('[WorkerProcessor] Monitor tick skipped: 登录退避中');
+          this._backoffWarned = true;
+        }
+      } else {
+        console.error('[WorkerProcessor] Monitor tick failed:', error);
+        this._backoffWarned = false; // 非退避错误，重置标志
+      }
     } finally {
       this.monitorTickRunning = false;
     }
@@ -88,8 +98,12 @@ export class WorkerProcessor {
       if (triggered.length > 0) {
         console.log(`[WorkerProcessor] Analysis tick triggered ${triggered.length} scheduled analyses`);
       }
-    } catch (error) {
-      console.error('[WorkerProcessor] Analysis tick failed:', error);
+    } catch (error: any) {
+      if (error?.message?.includes('登录退避中')) {
+        // 静默跳过，不刷屏
+      } else {
+        console.error('[WorkerProcessor] Analysis tick failed:', error);
+      }
     } finally {
       this.analysisTickRunning = false;
     }

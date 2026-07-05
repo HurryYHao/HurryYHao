@@ -127,6 +127,7 @@ export const liveAlerts = pgTable(
     suggestion: text("suggestion"),
     status: varchar("status", { length: 20 }).notNull().default("active"),
     triggered_at: timestamp("triggered_at", { withTimezone: true }),
+    offset_minutes: integer("offset_minutes"),
     resolved_at: timestamp("resolved_at", { withTimezone: true }),
     is_read: boolean("is_read").default(false),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

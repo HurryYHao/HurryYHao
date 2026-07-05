@@ -169,7 +169,7 @@ export class JobQueue {
   // 完成任务
   async complete(jobId: number, result?: any) {
     const client = getSupabaseClient();
-    await client.from('background_jobs')
+    const { data, error } = await client.from('background_jobs')
       .update({
         status: 'success',
         result: result,
@@ -178,7 +178,11 @@ export class JobQueue {
         locked_until: null
       })
       .eq('id', jobId)
-      .eq('locked_by', this.workerId);
+      .in('status', ['running', 'pending']);
+    
+    if (error) {
+      console.error(`[JobQueue] Failed to complete job ${jobId}:`, error);
+    }
   }
 
   // 任务失败
@@ -203,7 +207,7 @@ export class JobQueue {
         locked_until: null
       })
       .eq('id', jobId)
-      .eq('locked_by', this.workerId);
+      .in('status', ['running', 'pending']);
   }
 }
 
