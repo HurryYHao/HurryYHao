@@ -1,129 +1,151 @@
 import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { NextRequest } from 'next/server';
+import {
+  Document, Packer, Paragraph, TextRun, HeadingLevel,
+  AlignmentType, Table, TableRow, TableCell, WidthType,
+  BorderStyle,
+} from 'docx';
 
-export async function GET(request: Request) {
+/**
+ * GET /api/knowledge/export?format=json   (JSON格式，用于导入)
+ * GET /api/knowledge/export?format=docx   (DOCX格式，用于阅读)
+ * GET /api/knowledge/export?category=xxx  (按分类过滤)
+ * GET /api/knowledge/export?type=knowledge|scripts|all  (类型过滤)
+ */
+export async function GET(request: NextRequest) {
   try {
-    const supabase = getSupabaseClient();
     const url = new URL(request.url);
-    const type = url.searchParams.get('type') || 'all'; // all | knowledge | scripts | skill
-    const format = url.searchParams.get('format') || 'json'; // json | csv
+    const format = url.searchParams.get('format') || 'json';
+    const category = url.searchParams.get('category');
+    const type = url.searchParams.get('type') || 'all';
 
-    if (type === 'skill') {
-      return exportSkill();
-    }
+    const supabase = getSupabaseClient();
 
-    const result: Record<string, unknown> = {};
     let knowledgeData: any[] = [];
     let scriptsData: any[] = [];
 
-    if (type === 'all' || type === 'knowledge') {
-      const { data: knowledge, error: kErr } = await supabase
-        .from('analysis_knowledge')
-        .select('*')
-        .order('confidence', { ascending: false });
-      if (kErr) throw kErr;
-      knowledgeData = Array.isArray(knowledge) ? knowledge : [];
-      result.knowledge = knowledgeData;
+    // 获取知识库数据
+    if (type === 'knowledge' || type === 'all') {
+      let query = supabase.from('analysis_knowledge').select('*').order('category');
+      if (category) query = query.eq('category', category);
+      const { data, error } = await query;
+      if (error) throw error;
+      knowledgeData = data || [];
     }
 
-    if (type === 'all' || type === 'scripts') {
-      const { data: scripts, error: sErr } = await supabase
-        .from('live_scripts')
-        .select('*')
-        .order('session_date', { ascending: false });
-      if (sErr) throw sErr;
-      scriptsData = Array.isArray(scripts) ? scripts : [];
-      result.scripts = scriptsData;
+    // 获取话术数据
+    if (type === 'scripts' || type === 'all') {
+      const { data, error } = await supabase.from('live_scripts').select('*').order('session_date');
+      if (error) throw error;
+      scriptsData = data || [];
     }
 
-    if (format === 'csv') {
-      return exportCSV({ ...result, knowledge: knowledgeData, scripts: scriptsData }, type);
+    if (knowledgeData.length === 0 && scriptsData.length === 0) {
+      return Response.json({ error: '没有可导出的知识库数据' }, { status: 404 });
     }
 
-    return Response.json({
-      success: true,
-      exported_at: new Date().toISOString(),
-      data: result,
+    // JSON格式 - 用于备份和导入
+    if (format === 'json') {
+      return Response.json({
+        success: true,
+        exportedAt: new Date().toISOString(),
+        knowledge: knowledgeData,
+        scripts: scriptsData,
+      });
+    }
+
+    // DOCX格式 - 用于阅读
+    const children: Paragraph[] = [];
+
+    children.push(new Paragraph({
+      children: [new TextRun({ text: '知识库导出', bold: true, size: 56, color: '1A5276' })],
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 400 },
+    }));
+    children.push(new Paragraph({
+      children: [new TextRun({ text: `导出时间: ${new Date().toLocaleString('zh-CN')}`, size: 24, color: '666666' })],
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 1000 },
+    }));
+
+    // 知识库条目
+    if (knowledgeData.length > 0) {
+      children.push(new Paragraph({
+        children: [new TextRun({ text: `分析知识库 (${knowledgeData.length}条)`, bold: true, size: 32, color: '1A5276' })],
+        heading: HeadingLevel.HEADING_1,
+        spacing: { before: 300, after: 200 },
+      }));
+
+      // 按category分组
+      const catMap = new Map<string, any[]>();
+      for (const item of knowledgeData) {
+        const cat = item.category || '未分类';
+        if (!catMap.has(cat)) catMap.set(cat, []);
+        catMap.get(cat)!.push(item);
+      }
+
+      for (const [cat, items] of catMap) {
+        children.push(new Paragraph({
+          children: [new TextRun({ text: cat, bold: true, size: 26, color: '2E86C1' })],
+          heading: HeadingLevel.HEADING_2,
+          spacing: { before: 200, after: 100 },
+        }));
+
+        for (const item of items) {
+          children.push(new Paragraph({
+            children: [
+              new TextRun({ text: `[${item.dimension || ''}] `, bold: true, size: 20 }),
+              new TextRun({ text: `${item.key || ''}: `, size: 20 }),
+              new TextRun({ text: `${item.value || ''}`, size: 20 }),
+            ],
+            spacing: { after: 80 },
+          }));
+        }
+      }
+    }
+
+    // 话术模板
+    if (scriptsData.length > 0) {
+      children.push(new Paragraph({
+        children: [new TextRun({ text: `话术模板 (${scriptsData.length}条)`, bold: true, size: 32, color: '1A5276' })],
+        heading: HeadingLevel.HEADING_1,
+        spacing: { before: 400, after: 200 },
+      }));
+
+      for (const script of scriptsData) {
+        children.push(new Paragraph({
+          children: [new TextRun({ text: `${script.anchor_name || '未知'} - ${script.session_date || ''}`, bold: true, size: 24, color: '2E86C1' })],
+          heading: HeadingLevel.HEADING_2,
+          spacing: { before: 200, after: 100 },
+        }));
+
+        if (script.script_content) {
+          const content = typeof script.script_content === 'string'
+            ? script.script_content
+            : JSON.stringify(script.script_content, null, 2);
+          for (const line of content.split('\n')) {
+            if (line.trim()) {
+              children.push(new Paragraph({
+                children: [new TextRun({ text: line.trim(), size: 20 })],
+                spacing: { after: 60 },
+              }));
+            }
+          }
+        }
+      }
+    }
+
+    const doc = new Document({ sections: [{ children }] });
+    const buffer = await Packer.toBuffer(doc);
+
+    return new Response(new Uint8Array(buffer), {
+      headers: {
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent('知识库导出_' + new Date().toISOString().split('T')[0] + '.docx')}`,
+      },
     });
   } catch (err) {
     console.error('[KnowledgeExport] 导出失败:', err);
     return Response.json({ error: String(err) }, { status: 500 });
   }
-}
-
-/** 导出完整技能包（知识库+脚本+分析框架），用于迁移到新环境 */
-async function exportSkill() {
-  const supabase = getSupabaseClient();
-  const [knowledge, scripts, skillVersions] = await Promise.all([
-    supabase.from('analysis_knowledge').select('*').order('confidence', { ascending: false }),
-    supabase.from('live_scripts').select('*').order('session_date', { ascending: false }),
-    supabase.from('skill_versions').select('*').order('created_at', { ascending: false }).limit(5),
-  ]);
-
-  const knowledgeData = Array.isArray(knowledge.data) ? knowledge.data : [];
-  const scriptsData = Array.isArray(scripts.data) ? scripts.data : [];
-  const skillVersionsData = Array.isArray(skillVersions.data) ? skillVersions.data : [];
-  
-  const skillPackage = {
-    _meta: {
-      name: 'AI直播分析技能包',
-      version: new Date().toISOString().split('T')[0],
-      exported_at: new Date().toISOString(),
-      description: '包含知识库、直播脚本、分析框架，可导入新环境',
-    },
-    knowledge: knowledgeData,
-    scripts: scriptsData,
-    skill_versions: skillVersionsData,
-    analysis_framework: {
-      dimensions: ['anchor', 'interaction', 'conversion', 'sentiment', 'rhythm'],
-      dimension_names: {
-        anchor: '主播话术',
-        interaction: '互动热度',
-        conversion: '商品转化',
-        sentiment: '评论舆情',
-        rhythm: '直播节奏',
-      },
-      knowledge_categories: ['threshold', 'pattern', 'benchmark', 'rule'],
-    },
-  };
-
-  return Response.json({
-    success: true,
-    exported_at: skillPackage._meta.exported_at,
-    stats: {
-      knowledge_count: knowledgeData.length,
-      scripts_count: scriptsData.length,
-      skill_versions_count: skillVersionsData.length,
-    },
-    data: skillPackage,
-  });
-}
-
-function exportCSV(data: Record<string, unknown>, type: string): Response {
-  const items = type === 'scripts'
-    ? (Array.isArray(data.scripts) ? data.scripts : []) as Array<Record<string, unknown>>
-    : (Array.isArray(data.knowledge) ? data.knowledge : []) as Array<Record<string, unknown>>;
-
-  if (!items || items.length === 0) {
-    return Response.json({ error: '无数据可导出' }, { status: 400 });
-  }
-
-  const headers = Object.keys(items[0]);
-  const csvRows = [
-    headers.join(','),
-    ...items.map(item =>
-      headers.map(h => {
-        const val = String(item[h] ?? '');
-        return val.includes(',') || val.includes('"') || val.includes('\n')
-          ? `"${val.replace(/"/g, '""')}"`
-          : val;
-      }).join(',')
-    ),
-  ];
-
-  return new Response(csvRows.join('\n'), {
-    headers: {
-      'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename=knowledge_${type}_${new Date().toISOString().split('T')[0]}.csv`,
-    },
-  });
 }

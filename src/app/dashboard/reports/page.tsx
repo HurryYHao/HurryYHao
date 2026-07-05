@@ -1,14 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  BarChart3, FileText, Loader2, MessageSquare,
-  RefreshCw, ShoppingBag, Star, TrendingUp, Users
+  BarChart3, Download, FileText, Loader2, MessageSquare,
+  RefreshCw, ShoppingBag, Star, Trash2, TrendingUp, Upload, Users, X
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -60,8 +61,13 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [reportsLoading, setReportsLoading] = useState(false);
   const [selectedAnchor, setSelectedAnchor] = useState<string | null>(null);
+  // Batch operations
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [batchMode, setBatchMode] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const importRef = useRef<HTMLInputElement>(null);
 
-  // 先定义fetchReports
   const fetchReports = async (sessionId: number) => {
     setReportsLoading(true);
     try {
@@ -85,40 +91,33 @@ export default function ReportsPage() {
     try {
       const res = await fetch('/api/sessions?page=1&pageSize=50');
       const json = await res.json();
-      console.log('[Reports] API返回:', json.success, 'sessions数量:', json.data?.sessions?.length);
       if (json.success) {
         const sessionList: Session[] = json.data.sessions || [];
         setSessions(sessionList);
       }
-    } catch (err) { 
+    } catch (err) {
       console.error('[Reports] 获取会话失败:', err);
-      toast.error('获取会话失败'); 
+      toast.error('获取会话失败');
     }
     finally { setLoading(false); }
   }, []);
 
   useEffect(() => { fetchSessions(); }, [fetchSessions]);
 
-  // 使用单独的effect设置默认选择
   useEffect(() => {
     if (sessions.length > 0 && !selectedAnchor) {
       const firstAnchor = sessions[0].anchorName || '未知主播';
-      console.log('[Reports] 自动设置anchor:', firstAnchor);
       setSelectedAnchor(firstAnchor);
       setSelectedSession(sessions[0]);
-      // 使用异步调用避免依赖循环
       fetch(`/api/reports/${sessions[0].id}`)
         .then(res => res.json())
         .then(json => {
-          if (json.success) {
-            setReports(json.data.reports || []);
-          }
+          if (json.success) setReports(json.data.reports || []);
         })
         .catch(err => console.error('[Reports] 自动加载报告失败:', err));
     }
   }, [sessions, selectedAnchor]);
 
-  // 按主播分组
   const anchorGroups = sessions.reduce<Record<string, Session[]>>((acc, s) => {
     const anchor = s.anchorName || '未知主播';
     if (!acc[anchor]) acc[anchor] = [];
@@ -131,7 +130,178 @@ export default function ReportsPage() {
 
   const handleSelectSession = (session: Session) => {
     setSelectedSession(session);
+    setSelectedIds(new Set());
     fetchReports(session.id);
+  };
+
+  // Batch toggle
+  const toggleSelect = (id: number) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === reports.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(reports.map(r => r.id)));
+    }
+  };
+
+  // Export single report as DOCX
+  const handleExportSingle = async (report: Report) => {
+    try {
+      const res = await fetch('/api/reports/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportIds: [report.id], format: 'docx' }),
+      });
+      if (!res.ok) throw new Error('导出失败');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `分析报告_${report.reportType === 'final' ? '终场' : `片段${report.segmentSeq}`}_${report.id}.docx`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      toast.success('导出成功');
+    } catch {
+      toast.error('导出失败');
+    }
+  };
+
+  // Batch export
+  const handleBatchExport = async () => {
+    if (selectedIds.size === 0) { toast.error('请先选择报告'); return; }
+    setExporting(true);
+    try {
+      const res = await fetch('/api/reports/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportIds: Array.from(selectedIds), format: 'docx' }),
+      });
+      if (!res.ok) throw new Error('导出失败');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `分析报告_批量导出_${selectedIds.size}份.docx`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      toast.success(`成功导出 ${selectedIds.size} 份报告`);
+      setSelectedIds(new Set());
+      setBatchMode(false);
+    } catch {
+      toast.error('批量导出失败');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // Export all reports for current session
+  const handleExportAll = async () => {
+    if (!selectedSession) return;
+    setExporting(true);
+    try {
+      const allIds = reports.map(r => r.id);
+      const res = await fetch('/api/reports/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportIds: allIds, format: 'docx' }),
+      });
+      if (!res.ok) throw new Error('导出失败');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `分析报告_全部_${selectedSession.roomName || selectedSession.roomId}.docx`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      toast.success(`成功导出 ${allIds.length} 份报告`);
+    } catch {
+      toast.error('导出全部报告失败');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // Delete single report
+  const handleDeleteSingle = async (report: Report) => {
+    if (!confirm(`确定删除该${report.reportType === 'final' ? '终场' : '片段'}分析报告？`)) return;
+    try {
+      const res = await fetch('/api/reports/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportIds: [report.id] }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        toast.success('删除成功');
+        if (selectedSession) fetchReports(selectedSession.id);
+        if (selectedReport?.id === report.id) setSelectedReport(null);
+      } else {
+        toast.error(json.error || '删除失败');
+      }
+    } catch {
+      toast.error('删除失败');
+    }
+  };
+
+  // Batch delete
+  const handleBatchDelete = async () => {
+    if (selectedIds.size === 0) { toast.error('请先选择报告'); return; }
+    if (!confirm(`确定删除选中的 ${selectedIds.size} 份报告？此操作不可恢复！`)) return;
+    setDeleting(true);
+    try {
+      const res = await fetch('/api/reports/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportIds: Array.from(selectedIds) }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        toast.success(`成功删除 ${selectedIds.size} 份报告`);
+        setSelectedIds(new Set());
+        setBatchMode(false);
+        if (selectedSession) fetchReports(selectedSession.id);
+        if (selectedReport && selectedIds.has(selectedReport.id)) setSelectedReport(null);
+      } else {
+        toast.error(json.error || '批量删除失败');
+      }
+    } catch {
+      toast.error('批量删除失败');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  // Import reports
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const res = await fetch('/api/reports/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reports: Array.isArray(data) ? data : data.reports || [data] }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        toast.success(`成功导入 ${json.data?.imported || 0} 份报告`);
+        fetchSessions();
+        if (selectedSession) fetchReports(selectedSession.id);
+      } else {
+        toast.error(json.error || '导入失败');
+      }
+    } catch {
+      toast.error('导入文件格式错误');
+    }
+    if (importRef.current) importRef.current.value = '';
   };
 
   if (loading) return (
@@ -145,9 +315,15 @@ export default function ReportsPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold flex items-center gap-2"><FileText className="h-6 w-6" />分析报告</h1>
-        <Button variant="outline" size="sm" onClick={() => fetchSessions()}>
-          <RefreshCw className="h-3 w-3 mr-1" />刷新
-        </Button>
+        <div className="flex items-center gap-2">
+          <input ref={importRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
+          <Button variant="outline" size="sm" onClick={() => importRef.current?.click()}>
+            <Upload className="h-3 w-3 mr-1" />导入
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => fetchSessions()}>
+            <RefreshCw className="h-3 w-3 mr-1" />刷新
+          </Button>
+        </div>
       </div>
 
       {/* 五维维度图标展示 */}
@@ -171,7 +347,7 @@ export default function ReportsPage() {
               key={name}
               variant={selectedAnchor === name ? 'default' : 'outline'}
               size="sm"
-              onClick={() => { setSelectedAnchor(name); setSelectedSession(null); setReports([]); }}
+              onClick={() => { setSelectedAnchor(name); setSelectedSession(null); setReports([]); setSelectedIds(new Set()); }}
               className="gap-1"
             >
               {name === '雅文老师' && <Star className="h-3 w-3" />}
@@ -184,9 +360,9 @@ export default function ReportsPage() {
         </div>
       )}
 
-      {/* 主内容区：左右分栏，自适应填满视口高度 */}
+      {/* 主内容区：左右分栏 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6" style={{ minHeight: 'calc(100vh - 260px)' }}>
-        {/* 左侧：会话列表（按主播过滤） */}
+        {/* 左侧：会话列表 */}
         <div className="lg:col-span-1 flex flex-col">
           <Card className="flex flex-col flex-1">
             <CardHeader className="pb-2 shrink-0">
@@ -232,9 +408,44 @@ export default function ReportsPage() {
         <div className="lg:col-span-2 flex flex-col">
           <Card className="flex flex-col flex-1">
             <CardHeader className="pb-2 shrink-0">
-              <CardTitle className="text-base">
-                {selectedSession ? `${selectedSession.roomName || selectedSession.templateName || selectedSession.roomId} 的报告` : '请选择会话'}
-              </CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">
+                  {selectedSession ? `${selectedSession.roomName || selectedSession.templateName || selectedSession.roomId} 的报告` : '请选择会话'}
+                </CardTitle>
+                {selectedSession && reports.length > 0 && (
+                  <div className="flex items-center gap-1">
+                    {batchMode ? (
+                      <>
+                        <Button variant="outline" size="sm" onClick={toggleSelectAll} className="text-xs h-7">
+                          <Checkbox checked={selectedIds.size === reports.length} className="mr-1 h-3 w-3" />
+                          {selectedIds.size === reports.length ? '取消全选' : '全选'}
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={handleBatchExport} disabled={exporting || selectedIds.size === 0} className="text-xs h-7">
+                          {exporting ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Download className="h-3 w-3 mr-1" />}
+                          导出({selectedIds.size})
+                        </Button>
+                        <Button variant="destructive" size="sm" onClick={handleBatchDelete} disabled={deleting || selectedIds.size === 0} className="text-xs h-7">
+                          {deleting ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Trash2 className="h-3 w-3 mr-1" />}
+                          删除({selectedIds.size})
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => { setBatchMode(false); setSelectedIds(new Set()); }} className="text-xs h-7">
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Button variant="outline" size="sm" onClick={handleExportAll} disabled={exporting} className="text-xs h-7">
+                          {exporting ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Download className="h-3 w-3 mr-1" />}
+                          全部导出
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => setBatchMode(true)} className="text-xs h-7">
+                          批量操作
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
             </CardHeader>
             <CardContent className="flex-1 min-h-0">
               {!selectedSession ? (
@@ -255,11 +466,18 @@ export default function ReportsPage() {
                     {reports.map(report => (
                       <div
                         key={report.id}
-                        className="p-4 rounded-lg border hover:bg-muted/30 cursor-pointer transition-colors"
-                        onClick={() => setSelectedReport(report)}
+                        className={`p-4 rounded-lg border transition-colors ${batchMode ? 'cursor-default' : 'hover:bg-muted/30 cursor-pointer'}`}
+                        onClick={() => { if (!batchMode) setSelectedReport(report); }}
                       >
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
+                            {batchMode && (
+                              <Checkbox
+                                checked={selectedIds.has(report.id)}
+                                onCheckedChange={() => toggleSelect(report.id)}
+                                onClick={e => e.stopPropagation()}
+                              />
+                            )}
                             {report.reportType === 'final' ? (
                               <Badge className="bg-primary text-primary-foreground text-xs">终场分析</Badge>
                             ) : (
@@ -270,7 +488,6 @@ export default function ReportsPage() {
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
-                            {/* 综合评分 */}
                             {report.overallScore && (
                               <Badge variant="outline" className="text-xs font-bold">
                                 <Star className="h-3 w-3 mr-1 text-primary" />
@@ -278,6 +495,25 @@ export default function ReportsPage() {
                               </Badge>
                             )}
                             <span className="text-xs text-muted-foreground">v{report.skillVersion || '?'}</span>
+                            {/* Single report actions */}
+                            {!batchMode && (
+                              <div className="flex items-center gap-1 ml-2">
+                                <Button
+                                  variant="ghost" size="sm" className="h-6 w-6 p-0"
+                                  onClick={e => { e.stopPropagation(); handleExportSingle(report); }}
+                                  title="导出DOCX"
+                                >
+                                  <Download className="h-3 w-3" />
+                                </Button>
+                                <Button
+                                  variant="ghost" size="sm" className="h-6 w-6 p-0 text-destructive hover:text-destructive"
+                                  onClick={e => { e.stopPropagation(); handleDeleteSingle(report); }}
+                                  title="删除"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            )}
                           </div>
                         </div>
                         {/* 五维评分条 */}
@@ -310,14 +546,16 @@ export default function ReportsPage() {
                             })}
                           </div>
                         )}
-                        {/* 报告内容预览：展示前300字符，点击查看完整 */}
+                        {/* 报告内容预览 */}
                         <div className="text-sm text-muted-foreground">
                           {report.analysisText ? (
                             <div className="relative">
                               <p className="line-clamp-4">
                                 {report.analysisText.replace(/^#+\s*/gm, '').replace(/---/g, '').replace(/\n{2,}/g, '\n').slice(0, 300)}
                               </p>
-                              <span className="text-primary text-xs ml-1 hover:underline">点击查看完整报告 →</span>
+                              {!batchMode && (
+                                <span className="text-primary text-xs ml-1 hover:underline">点击查看完整报告 →</span>
+                              )}
                             </div>
                           ) : (
                             <span>无内容</span>
@@ -350,6 +588,18 @@ export default function ReportsPage() {
               {selectedReport?.anchorName && (
                 <Badge variant="outline" className="text-xs">{selectedReport.anchorName}</Badge>
               )}
+              <div className="ml-auto flex items-center gap-1">
+                {selectedReport && (
+                  <>
+                    <Button variant="outline" size="sm" onClick={() => handleExportSingle(selectedReport)} className="text-xs h-7">
+                      <Download className="h-3 w-3 mr-1" />导出DOCX
+                    </Button>
+                    <Button variant="destructive" size="sm" onClick={() => { handleDeleteSingle(selectedReport); setSelectedReport(null); }} className="text-xs h-7">
+                      <Trash2 className="h-3 w-3 mr-1" />删除
+                    </Button>
+                  </>
+                )}
+              </div>
             </DialogTitle>
           </DialogHeader>
           <ScrollArea className="h-[60vh]">

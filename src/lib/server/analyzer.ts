@@ -789,7 +789,7 @@ function buildAnalysisDataMarkdown(
     liveDuration = `，直播已进行约${hours}小时${minutes}分钟`;
   }
   const segmentContext = reportType === REPORT_TYPE.FINAL
-    ? '终场综合分析（整场直播）'
+    ? `终场综合分析（整场直播）。这是直播结束后的完整复盘，需综合所有片段数据，分析整场直播的完整时间线：开场暖场→情感痛点→心理理论→实操演示→产品植入→互动促单→收尾。重点关注：整场转化漏斗、各阶段数据变化趋势、话术策略的阶段性效果、产品销售节奏、主播全场的节奏把控能力。`
     : `这是本场直播的第${segmentSeq}个30分钟片段${liveDuration}。${segmentSeq === 1 ? '这是直播开场阶段。' : segmentSeq === 2 ? '这是直播前中期阶段。' : segmentSeq <= 4 ? '这是直播中段阶段，主播已进入核心内容。' : '这是直播后期阶段，主播应已进入深度内容和促单环节。'}请不要将非第1片段标注为"开场暖场"。`;
 
   // For segment analysis: determine the time window

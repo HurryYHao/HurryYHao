@@ -1,21 +1,50 @@
 import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { NextRequest } from 'next/server';
 
-/** 导入技能包（从导出文件恢复到新环境） */
-export async function POST(request: Request) {
+/**
+ * POST /api/knowledge/import
+ * 支持两种格式:
+ * 1. 新格式: { knowledge: [...], scripts: [...], overwrite?: boolean }  (从 /api/knowledge/export?format=json 导出)
+ * 2. 旧格式: { data: { _meta, knowledge, scripts } }  (技能包格式)
+ */
+export async function POST(request: NextRequest) {
   try {
     const supabase = getSupabaseClient();
     const body = await request.json();
-    const { data: skillPackage } = body;
 
-    if (!skillPackage || !skillPackage._meta) {
-      return Response.json({ error: '无效的技能包格式' }, { status: 400 });
+    // 兼容两种格式
+    let knowledgeItems: any[] = [];
+    let scriptItems: any[] = [];
+    let overwrite = false;
+
+    if (body.data && body.data._meta) {
+      // 旧格式: 技能包
+      knowledgeItems = body.data.knowledge || [];
+      scriptItems = body.data.scripts || [];
+    } else if (body.knowledge || body.scripts) {
+      // 新格式: 直接从导出导入
+      knowledgeItems = body.knowledge || [];
+      scriptItems = body.scripts || [];
+      overwrite = body.overwrite || false;
+    } else {
+      return Response.json({ error: '无效的导入数据格式' }, { status: 400 });
     }
 
     const results = { knowledge: 0, scripts: 0, errors: [] as string[] };
 
-    // 1. 导入知识条目
-    if (skillPackage.knowledge && Array.isArray(skillPackage.knowledge)) {
-      for (const item of skillPackage.knowledge) {
+    // 导入知识条目
+    for (const item of knowledgeItems) {
+      try {
+        if (overwrite) {
+          // 先删再插
+          await supabase
+            .from('analysis_knowledge')
+            .delete()
+            .eq('category', item.category)
+            .eq('dimension', item.dimension)
+            .eq('key', item.key);
+        }
+
         const { error } = await supabase
           .from('analysis_knowledge')
           .upsert({
@@ -30,16 +59,26 @@ export async function POST(request: Request) {
           }, { onConflict: 'category,dimension,key' });
 
         if (error) {
-          results.errors.push(`knowledge:${item.key} - ${(error as any)?.message || error}`);
+          results.errors.push(`knowledge:${item.key} - ${error.message || error}`);
         } else {
           results.knowledge++;
         }
+      } catch (e) {
+        results.errors.push(`knowledge:${item.key} - ${String(e)}`);
       }
     }
 
-    // 2. 导入脚本
-    if (skillPackage.scripts && Array.isArray(skillPackage.scripts)) {
-      for (const script of skillPackage.scripts) {
+    // 导入话术
+    for (const script of scriptItems) {
+      try {
+        if (overwrite) {
+          await supabase
+            .from('live_scripts')
+            .delete()
+            .eq('session_date', script.session_date)
+            .eq('anchor_name', script.anchor_name);
+        }
+
         const { error } = await supabase
           .from('live_scripts')
           .upsert({
@@ -51,13 +90,16 @@ export async function POST(request: Request) {
             transaction_data: script.transaction_data,
             replay_transaction: script.replay_transaction,
             source: script.source,
+            script_content: script.script_content,
           }, { onConflict: 'session_date,anchor_name' });
 
         if (error) {
-          results.errors.push(`script:${script.session_date} - ${(error as any)?.message || error}`);
+          results.errors.push(`script:${script.session_date} - ${error.message || error}`);
         } else {
           results.scripts++;
         }
+      } catch (e) {
+        results.errors.push(`script:${script.session_date} - ${String(e)}`);
       }
     }
 
@@ -66,7 +108,6 @@ export async function POST(request: Request) {
     return Response.json({
       success: true,
       imported: results,
-      source: skillPackage._meta,
     });
   } catch (err) {
     console.error('[KnowledgeImport] 导入失败:', err);

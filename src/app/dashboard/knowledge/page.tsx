@@ -84,6 +84,10 @@ export default function KnowledgePage() {
   const [backupInfo, setBackupInfo] = useState<{ timestamp: string; knowledge_count: number; scripts_count: number } | null>(null);
   const [exporting, setExporting] = useState(false);
 
+  // Selection state for batch operations
+  const [selectedKnowledgeIds, setSelectedKnowledgeIds] = useState<Set<number>>(new Set());
+  const [selectedScriptIds, setSelectedScriptIds] = useState<Set<number>>(new Set());
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
@@ -300,9 +304,120 @@ export default function KnowledgePage() {
     try {
       await fetch(`/api/knowledge/feed?id=${id}`, { method: 'DELETE' });
       setKnowledge(prev => prev.filter(item => item.id !== id));
+      setSelectedKnowledgeIds(prev => { const n = new Set(prev); n.delete(id); return n; });
     } catch (err) {
       console.error('删除失败:', err);
     }
+  };
+
+  // Batch delete knowledge items
+  const handleBatchDeleteKnowledge = async () => {
+    if (selectedKnowledgeIds.size === 0) return;
+    if (!confirm(`确定删除选中的 ${selectedKnowledgeIds.size} 条知识条目？`)) return;
+    try {
+      const res = await fetch('/api/knowledge/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedKnowledgeIds) }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setKnowledge(prev => prev.filter(item => !selectedKnowledgeIds.has(item.id)));
+        setSelectedKnowledgeIds(new Set());
+      } else {
+        alert(`删除失败: ${json.error}`);
+      }
+    } catch (err) {
+      alert(`批量删除失败: ${err}`);
+    }
+  };
+
+  // Delete script
+  const handleDeleteScript = async (id: number) => {
+    if (!confirm('确定删除此脚本？')) return;
+    try {
+      const res = await fetch(`/api/knowledge/feed?scriptId=${id}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (json.success) {
+        setScripts(prev => prev.filter(s => s.id !== id));
+        setSelectedScriptIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+      } else {
+        alert(`删除失败: ${json.error}`);
+      }
+    } catch (err) {
+      alert(`删除失败: ${err}`);
+    }
+  };
+
+  // Batch delete scripts
+  const handleBatchDeleteScripts = async () => {
+    if (selectedScriptIds.size === 0) return;
+    if (!confirm(`确定删除选中的 ${selectedScriptIds.size} 条脚本？`)) return;
+    try {
+      const res = await fetch('/api/knowledge/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scriptIds: Array.from(selectedScriptIds) }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setScripts(prev => prev.filter(s => !selectedScriptIds.has(s.id)));
+        setSelectedScriptIds(new Set());
+      } else {
+        alert(`删除失败: ${json.error}`);
+      }
+    } catch (err) {
+      alert(`批量删除失败: ${err}`);
+    }
+  };
+
+  // Export knowledge as JSON
+  const handleExportJson = async () => {
+    try {
+      setExporting(true);
+      const res = await fetch('/api/knowledge/export?format=json');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `知识库_${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(`导出失败: ${err}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // Import knowledge from JSON
+  const handleImportJson = async () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        const res = await fetch('/api/knowledge/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        const json = await res.json();
+        if (json.success) {
+          alert(`导入成功: ${json.imported?.knowledge || 0}条知识, ${json.imported?.scripts || 0}条脚本`);
+          fetchData();
+        } else {
+          alert(`导入失败: ${json.error}`);
+        }
+      } catch (err) {
+        alert(`导入失败: ${err}`);
+      }
+    };
+    input.click();
   };
 
   return (
@@ -319,14 +434,30 @@ export default function KnowledgePage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {selectedKnowledgeIds.size > 0 && (
+            <Button variant="destructive" size="sm" onClick={handleBatchDeleteKnowledge}>
+              <Trash2 className="h-4 w-4 mr-1" /> 删除选中({selectedKnowledgeIds.size})
+            </Button>
+          )}
+          {selectedScriptIds.size > 0 && (
+            <Button variant="destructive" size="sm" onClick={handleBatchDeleteScripts}>
+              <Trash2 className="h-4 w-4 mr-1" /> 删除脚本({selectedScriptIds.size})
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={handleBackup}>
             <Shield className="h-4 w-4 mr-1" /> 备份
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleExportJson} disabled={exporting}>
+            <Download className="h-4 w-4 mr-1" /> 导出JSON
           </Button>
           <Button variant="outline" size="sm" onClick={() => handleExport('skill')} disabled={exporting}>
             <Download className="h-4 w-4 mr-1" /> 导出技能包
           </Button>
+          <Button variant="outline" size="sm" onClick={handleImportJson}>
+            <Upload className="h-4 w-4 mr-1" /> 导入JSON
+          </Button>
           <Button variant="outline" size="sm" onClick={handleImport}>
-            <Upload className="h-4 w-4 mr-1" /> 导入
+            <Upload className="h-4 w-4 mr-1" /> 导入技能包
           </Button>
           <Button variant="outline" size="sm" onClick={fetchData}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
@@ -431,26 +562,40 @@ export default function KnowledgePage() {
                 <Card key={item.id || `knowledge-${index}`} className="hover:shadow-sm transition-shadow">
                   <CardContent className="py-3 px-4">
                     <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <Badge variant="outline" className="text-xs">
-                            {CATEGORY_MAP[item.category] || item.category}
-                          </Badge>
-                          <Badge variant="secondary" className="text-xs">
-                            {DIMENSION_MAP[item.dimension] || item.dimension}
-                          </Badge>
-                          <Badge variant={item.confidence >= 3 ? 'default' : 'outline'} className="text-xs">
-                            置信度 {item.confidence}
-                          </Badge>
-                          {item.status && (
-                            <Badge variant="outline" className={`text-xs ${item.status === 'active' ? 'text-green-500 border-green-200 bg-green-50' : item.status === 'weakened' ? 'text-orange-500 border-orange-200 bg-orange-50' : 'text-slate-500 border-slate-200 bg-slate-50'}`}>
-                              {item.status === 'active' ? '生效中' : item.status === 'weakened' ? '已弱化' : '已归档'}
+                      <div className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedKnowledgeIds.has(item.id)}
+                          onChange={(e) => {
+                            setSelectedKnowledgeIds(prev => {
+                              const n = new Set(prev);
+                              if (e.target.checked) n.add(item.id); else n.delete(item.id);
+                              return n;
+                            });
+                          }}
+                          className="mt-1 shrink-0"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Badge variant="outline" className="text-xs">
+                              {CATEGORY_MAP[item.category] || item.category}
                             </Badge>
-                          )}
-                          <span className="text-xs text-muted-foreground">样本{item.sampleCount}</span>
+                            <Badge variant="secondary" className="text-xs">
+                              {DIMENSION_MAP[item.dimension] || item.dimension}
+                            </Badge>
+                            <Badge variant={item.confidence >= 3 ? 'default' : 'outline'} className="text-xs">
+                              置信度 {item.confidence}
+                            </Badge>
+                            {item.status && (
+                              <Badge variant="outline" className={`text-xs ${item.status === 'active' ? 'text-green-500 border-green-200 bg-green-50' : item.status === 'weakened' ? 'text-orange-500 border-orange-200 bg-orange-50' : 'text-slate-500 border-slate-200 bg-slate-50'}`}>
+                                {item.status === 'active' ? '生效中' : item.status === 'weakened' ? '已弱化' : '已归档'}
+                              </Badge>
+                            )}
+                            <span className="text-xs text-muted-foreground">样本{item.sampleCount}</span>
+                          </div>
+                          <div className="font-medium text-sm">{item.key}</div>
+                          <div className="text-sm text-muted-foreground mt-0.5 line-clamp-2">{item.value}</div>
                         </div>
-                        <div className="font-medium text-sm">{item.key}</div>
-                        <div className="text-sm text-muted-foreground mt-0.5 line-clamp-2">{item.value}</div>
                       </div>
                       <Button variant="ghost" size="icon" className="shrink-0 h-7 w-7" onClick={() => handleDelete(item.id)}>
                         <Trash2 className="h-3.5 w-3.5" />
@@ -477,10 +622,26 @@ export default function KnowledgePage() {
                 <Card key={script.id}>
                   <CardHeader className="py-3 px-4">
                     <div className="flex items-center justify-between">
-                      <CardTitle className="text-base font-semibold">{script.sessionDate}</CardTitle>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedScriptIds.has(script.id)}
+                          onChange={(e) => {
+                            setSelectedScriptIds(prev => {
+                              const n = new Set(prev);
+                              if (e.target.checked) n.add(script.id); else n.delete(script.id);
+                              return n;
+                            });
+                          }}
+                        />
+                        <CardTitle className="text-base font-semibold">{script.sessionDate}</CardTitle>
+                      </div>
                       <div className="flex items-center gap-2">
                         <Badge variant="outline">{script.anchorName || '未知'}</Badge>
                         {script.source && <Badge variant="secondary" className="text-xs">{script.source}</Badge>}
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleDeleteScript(script.id)}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
                       </div>
                     </div>
                   </CardHeader>

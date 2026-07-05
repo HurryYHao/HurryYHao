@@ -332,16 +332,31 @@ export async function GET(request: Request) {
 
 /**
  * DELETE /api/knowledge/feed
- * 删除知识条目
+ * 删除知识条目或脚本（支持单个和批量）
+ * Query: id=123 或 ids=1,2,3, type=knowledge|script
  */
 export async function DELETE(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
+    const idsParam = searchParams.get('ids');
     const type = searchParams.get('type'); // 'knowledge' or 'script'
 
+    // 批量删除
+    if (idsParam) {
+      const ids = idsParam.split(',').map(Number).filter(n => n > 0);
+      if (ids.length === 0) {
+        return NextResponse.json({ error: 'ids参数无效' }, { status: 400 });
+      }
+      const table = type === 'script' ? 'live_scripts' : 'analysis_knowledge';
+      const { error } = await getDb().from(table).delete().in('id', ids);
+      if (error) throw error;
+      return NextResponse.json({ success: true, deleted: ids.length });
+    }
+
+    // 单个删除
     if (!id) {
-      return NextResponse.json({ error: '缺少id参数' }, { status: 400 });
+      return NextResponse.json({ error: '缺少id或ids参数' }, { status: 400 });
     }
 
     if (type === 'script') {
