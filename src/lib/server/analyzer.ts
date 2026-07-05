@@ -868,14 +868,8 @@ function buildAnalysisDataMarkdown(
     // 主播语音转写
     if (filteredTranscription) {
       if (reportType === 'final') {
-        // 终场分析：截断转写，每个片段最多2000字，避免prompt超长
-        const MAX_FINAL_TRANSCRIPTION = 2000;
-        if (filteredTranscription.length > MAX_FINAL_TRANSCRIPTION) {
-          const truncated = filteredTranscription.slice(0, MAX_FINAL_TRANSCRIPTION);
-          sections.push(`\n### 主播语音转写（摘要，前${MAX_FINAL_TRANSCRIPTION}字）\n\n${truncated}\n\n...（转写过长已截断，完整转写见各片段分析）\n`);
-        } else {
-          sections.push(`\n### 主播语音转写\n\n${filteredTranscription}\n`);
-        }
+        // 终场分析：话术大纲已通过第一步提取，不再重复放入转写
+        sections.push(`\n### 主播语音转写\n\n话术大纲已在上方提供，此处不再重复完整转写文字。\n`);
       } else {
         // 片段分析：完整转写
         sections.push(`\n### 主播语音转写\n\n${filteredTranscription}\n`);
@@ -904,12 +898,8 @@ function buildAnalysisDataMarkdown(
     sections.push(`\n### 商品漏斗数据(点击→下单→支付)\n\n${buildGoodsFunnel(orderDetails)}\n`);
 
     // 评论舆情数据
-    if (reportType === 'final') {
-      // 终场分析：只保留评论摘要（前50条 + 统计），避免prompt超长
-      sections.push(`\n### 评论舆情数据（摘要）\n\n${buildCommentsDataSummary(comments)}\n`);
-    } else {
-      sections.push(`\n### 评论舆情数据\n\n${buildCommentsDataFull(comments, windowStart, windowEnd)}\n`);
-    }
+    // 终场分析：评论数据全部保留
+    sections.push(`\n### 评论舆情数据\n\n${buildCommentsDataFull(comments, windowStart, windowEnd)}\n`);
   }
 
   // For final analysis, add a condensed full-script summary
