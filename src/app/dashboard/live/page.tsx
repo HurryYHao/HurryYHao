@@ -5,12 +5,13 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
   Activity, ArrowLeft, ArrowUpDown, Clock, DollarSign, Eye,
   Loader2, MessageSquare, Package, RefreshCw, ShoppingBag,
-  Timer, UserCheck, Users, UserX, Zap
+  Timer, UserCheck, Users, UserX, Zap, FileText
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import ServerAudioRecorder from '@/components/dashboard/server-audio-recorder';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -97,6 +98,9 @@ function LiveDataPageContent() {
   const [refreshing, setRefreshing] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [elapsed, setElapsed] = useState('--');
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [transcriptText, setTranscriptText] = useState('');
+  const [transcriptSeq, setTranscriptSeq] = useState('');
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const historyRef = useRef<{ online: number[]; watch: number[]; comments: number[] }>({ online: [], watch: [], comments: [] });
 
@@ -449,6 +453,7 @@ function LiveDataPageContent() {
                     <TableHead>在线</TableHead>
                     <TableHead>评论</TableHead>
                     <TableHead>成交额</TableHead>
+                    <TableHead>转写</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -460,6 +465,25 @@ function LiveDataPageContent() {
                       <TableCell className="font-mono text-sm">{fmtNum(snap.online_user_cnt)}</TableCell>
                       <TableCell className="font-mono text-sm">{fmtNum(snap.comment_cnt)}</TableCell>
                       <TableCell className="font-mono text-sm">¥{fmtMoney(String(snap.order_total || 0))}</TableCell>
+                      <TableCell>
+                        {snap.transcription ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs gap-1 text-primary hover:text-primary"
+                            onClick={() => {
+                              setTranscriptSeq(String(snap.snapshotSeq || i + 1));
+                              setTranscriptText(String(snap.transcription));
+                              setTranscriptOpen(true);
+                            }}
+                          >
+                            <FileText className="h-3 w-3" />
+                            查看
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">--</span>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -468,6 +492,23 @@ function LiveDataPageContent() {
           </CardContent>
         </Card>
       )}
+
+      {/* 转写文字弹窗 */}
+      <Dialog open={transcriptOpen} onOpenChange={setTranscriptOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="h-4 w-4" />
+              片段 #{transcriptSeq} 转写文字
+            </DialogTitle>
+          </DialogHeader>
+          <ScrollArea className="max-h-[60vh] pr-4">
+            <div className="text-sm leading-relaxed whitespace-pre-wrap text-foreground/90">
+              {transcriptText}
+            </div>
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

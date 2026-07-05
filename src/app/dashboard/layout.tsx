@@ -7,16 +7,14 @@ import { cn } from '@/lib/utils';
 import { useMonitor } from '@/components/dashboard/monitor-provider';
 import { MonitorProvider } from '@/components/dashboard/monitor-provider';
 import {
-  BarChart3, Monitor, FileText, Settings, Activity, Radio, Pause, Play, Brain, Bell, CheckSquare, Users, Package, Clock, AlertTriangle, Terminal
+  BarChart3, Monitor, FileText, Settings, Activity, Radio, Pause, Play, Brain, Bell, Users, Package, AlertTriangle, Terminal
 } from 'lucide-react';
 
 const navigation = [
   { name: '概览', href: '/dashboard', icon: BarChart3 },
   { name: '数据大盘', href: '/dashboard/live', icon: Activity },
   { name: '实时预警', href: '/dashboard/alerts', icon: Bell },
-  { name: '统一直播时间轴', href: '/dashboard/timeline', icon: Clock },
   { name: '商品作战卡', href: '/dashboard/products', icon: Package },
-  { name: '复盘任务', href: '/dashboard/tasks', icon: CheckSquare },
   { name: '主播画像', href: '/dashboard/anchors', icon: Users },
   { name: '分析报告', href: '/dashboard/reports', icon: FileText },
   { name: '知识库', href: '/dashboard/knowledge', icon: Brain },
