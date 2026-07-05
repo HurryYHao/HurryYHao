@@ -635,12 +635,12 @@ function buildCommentsData(
   // Negative warnings
   const negativeComments = filtered.filter(c => negativeWords.some(w => String(c.content || '').includes(w)));
 
-  // Build comments sample with timestamps (limit 30 comments, truncate each to 60 chars)
-  const commentSample = filtered.slice(0, 30).map((c) => {
+  // Build comments sample with timestamps (不截断，展示全部评论数据)
+  const commentSample = filtered.map((c) => {
     const ts = Number(c.timestamp || 0);
     const timeStr = ts > 0 ? formatTimestamp(ts) : '--:--:--';
     const userTag = c.isNewUser ? '[新]' : '[老]';
-    const content = String(c.content || '').substring(0, 60);
+    const content = String(c.content || '');
     return `${timeStr} ${userTag}${c.nickname || '匿名'}: ${content}`;
   }).join('\n');
 
@@ -762,6 +762,226 @@ async function getProductBenchmarks(): Promise<string> {
   return `【商品成交基准数据】\n${text}`;
 }
 
+function buildAnalysisDataMarkdown(
+  snapshotData: Record<string, unknown>[],
+  reportType: 'segment' | 'final',
+  segmentSeq: number,
+): string {
+  const typeLabel = reportType === REPORT_TYPE.FINAL ? '终场综合' : `第${segmentSeq}片段(近30分钟)`;
+
+  // For segment analysis: determine the time window
+  const lastSnap = snapshotData[snapshotData.length - 1];
+  const snapshotTimeVal = lastSnap?.snapshotTime ?? lastSnap?.snapshot_time;
+  const snapshotTime = snapshotTimeVal ? new Date(String(snapshotTimeVal)) : null;
+
+  // For segment: window is last 30 min before snapshot_time
+  // For final: window is entire session
+  let windowStart: Date | null = null;
+  let windowEnd: Date | null = null;
+
+  if (reportType !== REPORT_TYPE.FINAL && snapshotTime) {
+    windowEnd = snapshotTime;
+    windowStart = new Date(snapshotTime.getTime() - 30 * 60 * 1000);
+  }
+
+  const sections: string[] = [];
+
+  sections.push(`# 直播数据分析资料 - ${typeLabel}`);
+  sections.push(`\n> 生成时间: ${new Date().toISOString()}\n`);
+
+  for (let idx = 0; idx < snapshotData.length; idx++) {
+    const snap = snapshotData[idx];
+    const rawJson = (snap.rawJson ?? snap.raw_json) as Record<string, unknown> | null;
+    if (!rawJson) continue;
+
+    const analysis = (rawJson.analysis as Record<string, unknown>) || {};
+    const newoldData = (rawJson.newoldData as Record<string, string>) || {};
+    const chartData = (rawJson.chartData as Record<string, unknown>) || {};
+    const comments = (rawJson.comments as Record<string, unknown>[]) || [];
+    const orderDetails = (rawJson.orderDetails as Record<string, unknown>[]) || [];
+    const orderSummary = (rawJson.orderSummary as Record<string, unknown>) || {};
+    const transcription = snap.transcription as string | null;
+    // 对转写文字做内容审核过滤
+    const filteredTranscription = transcription ? filterContent(transcription).filtered : null;
+
+    // Core metrics
+    const onlineCount = analysis.peakConcurrentViewers || 'N/A';
+    const avgOnline = chartData.onlineUserCntList
+      ? Math.round((chartData.onlineUserCntList as number[]).reduce((a: number, b: number) => a + b, 0) / (chartData.onlineUserCntList as number[]).length)
+      : 'N/A';
+    const watcherCnt = analysis.watcherCnt || 'N/A';
+    const viewCnt = analysis.viewCnt || 'N/A';
+    const commentCnt = analysis.commentCnt || 'N/A';
+    const commenterCnt = analysis.commenterCnt || 'N/A';
+    const interactionRate = analysis.interactionRate || 'N/A';
+    const productClickCnt = analysis.productClickCnt || 'N/A';
+    const mallPageViewCnt = analysis.mallPageViewCnt || 'N/A';
+    const transactionAmount = analysis.transactionAmount || orderSummary.totalAmount || 'N/A';
+    const transactionCnt = analysis.transactionCnt || orderSummary.paySuccessTotal || 'N/A';
+    const payUserCnt = analysis.payUserCnt || orderSummary.payUserTotal || 'N/A';
+    const avgWatchTime = analysis.avgWatchTime || 'N/A';
+    const displayOnline = reportType === REPORT_TYPE.FINAL ? onlineCount : avgOnline;
+
+    sections.push(`\n## 片段 ${idx + 1} (快照时间: ${snap.snapshotTime ?? snap.snapshot_time})\n`);
+
+    sections.push(`### 核心指标\n`);
+    sections.push(`| 指标 | 数值 |`);
+    sections.push(`|------|------|`);
+    sections.push(`| 当前/峰值在线人数 | ${displayOnline}${reportType !== REPORT_TYPE.FINAL ? ` (平均${avgOnline})` : ''} |`);
+    sections.push(`| 累计观看人数 | ${watcherCnt} |`);
+    sections.push(`| 累计观看人次 | ${viewCnt} |`);
+    sections.push(`| 评论数 | ${commentCnt} |`);
+    sections.push(`| 评论人数 | ${commenterCnt} |`);
+    sections.push(`| 互动率 | ${interactionRate}% |`);
+    sections.push(`| 商品点击次数 | ${productClickCnt} |`);
+    sections.push(`| 商城浏览次数 | ${mallPageViewCnt} |`);
+    sections.push(`| 成交总额 | ¥${transactionAmount} |`);
+    sections.push(`| 成交单数 | ${transactionCnt} |`);
+    sections.push(`| 支付人数 | ${payUserCnt} |`);
+    sections.push(`| 人均产值(成交/场观) | ${Number(watcherCnt) > 0 && Number(transactionAmount) > 0 ? '¥' + (Number(transactionAmount) / Number(watcherCnt)).toFixed(2) : 'N/A'} |`);
+    sections.push(`| 平均观看时长 | ${avgWatchTime}秒 |`);
+
+    // 主播语音转写 - 完整不截断
+    if (filteredTranscription) {
+      sections.push(`\n### 主播语音转写\n\n${filteredTranscription}\n`);
+    } else {
+      sections.push(`\n### 主播语音转写\n\n暂无转写数据\n`);
+    }
+
+    // 新老粉数据
+    sections.push(`\n### 新老粉数据\n`);
+    sections.push(`**新学员:**`);
+    sections.push(`- 观看人数: ${newoldData.nwatcherCnt || 'N/A'}`);
+    sections.push(`- 支付人数: ${newoldData.ntransactionUserCnt || 'N/A'}`);
+    sections.push(`- 转化率: ${newoldData.nconversionRate || 'N/A'}%`);
+    sections.push(`- 观看≥30min人数: ${newoldData.nwatcher30Cnt || 'N/A'}`);
+    sections.push(`\n**老学员:**`);
+    sections.push(`- 观看人数: ${newoldData.owatcherCnt || 'N/A'}`);
+    sections.push(`- 支付人数: ${newoldData.otransactionUserCnt || 'N/A'}`);
+    sections.push(`- 转化率: ${newoldData.oconversionRate || 'N/A'}%`);
+    sections.push(`- 观看≥30min人数: ${newoldData.owatcher30Cnt || 'N/A'}`);
+
+    // 时间曲线数据
+    sections.push(`\n### 时间曲线数据\n\n${extractChartWindow(chartData, windowStart, windowEnd)}\n`);
+
+    // 商品漏斗数据
+    sections.push(`\n### 商品漏斗数据(点击→下单→支付)\n\n${buildGoodsFunnel(orderDetails)}\n`);
+
+    // 评论舆情数据 - 完整不截断
+    sections.push(`\n### 评论舆情数据\n\n${buildCommentsDataFull(comments, windowStart, windowEnd)}\n`);
+  }
+
+  // For final analysis, collect all transcriptions into a complete script
+  if (reportType === REPORT_TYPE.FINAL) {
+    const transcriptions = snapshotData
+      .map((snap, idx) => {
+        const t = snap.transcription as string | null;
+        const filtered = t ? filterContent(t).filtered : null;
+        return filtered ? `### 片段${idx + 1}\n\n${filtered}` : '';
+      })
+      .filter(Boolean)
+      .join('\n\n');
+    if (transcriptions) {
+      sections.push(`\n## 整场直播完整脚本\n\n${transcriptions}\n`);
+    }
+  }
+
+  return sections.join('\n');
+}
+
+/**
+ * 构建完整评论数据（不截断，用于 md 文件）
+ */
+function buildCommentsDataFull(
+  comments: Record<string, unknown>[],
+  windowStart: Date | null,
+  windowEnd: Date | null
+): string {
+  if (!comments || comments.length === 0) return '暂无评论数据';
+
+  // Filter by time window if specified
+  const filtered = windowStart && windowEnd
+    ? comments.filter(c => {
+        const ts = Number(c.timestamp || 0);
+        if (!ts) return true;
+        const d = new Date(ts);
+        return d >= windowStart! && d <= windowEnd!;
+      })
+    : comments;
+
+  if (filtered.length === 0) return '时间窗口内暂无评论';
+
+  // Sentiment analysis
+  const positiveWords = ['好', '棒', '喜欢', '想要', '买了', '下单', '赞', '厉害', '牛', '漂亮', '心动', '好看', '爱', '帅', '美', '甜', '舒服', '推荐', '值', '可以', '实惠', '质量好', '正品', '靠谱'];
+  const negativeWords = ['差', '烂', '假', '骗', '退款', '投诉', '垃圾', '贵', '慢', '坏', '失望', '难用', '不好', '不满', '坑', '无语', '套路', '再也不', '被坑', '退货', '忽悠'];
+  const questionWords = ['吗', '呢', '？', '怎么', '什么', '哪', '多少', '如何', '为什么', '能不能', '可以吗'];
+
+  let positiveCnt = 0, negativeCnt = 0, questionCnt = 0;
+  let priceQ = 0, qualityQ = 0, shippingQ = 0, usageQ = 0;
+  const keywordMap = new Map<string, number>();
+
+  for (const c of filtered) {
+    const content = String(c.content || '');
+    if (positiveWords.some(w => content.includes(w))) positiveCnt++;
+    if (negativeWords.some(w => content.includes(w))) negativeCnt++;
+    if (questionWords.some(w => content.includes(w))) questionCnt++;
+    if (/价格|多少钱|贵|便宜|优惠|打折/.test(content)) priceQ++;
+    if (/效果|质量|好用|正品|假/.test(content)) qualityQ++;
+    if (/发货|快递|物流|到货|包邮/.test(content)) shippingQ++;
+    if (/怎么用|使用|方法|步骤|教程/.test(content)) usageQ++;
+    // Extract keywords (2-4 char segments)
+    for (let i = 0; i < content.length - 1; i++) {
+      const kw = content.substring(i, Math.min(i + 4, content.length));
+      if (kw.length >= 2 && /[\u4e00-\u9fff]/.test(kw)) {
+        keywordMap.set(kw, (keywordMap.get(kw) || 0) + 1);
+      }
+    }
+  }
+
+  const topKeywords = [...keywordMap.entries()]
+    .filter(([, cnt]) => cnt >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 30)
+    .map(([kw, cnt]) => `${kw}(${cnt})`)
+    .join(', ');
+
+  const negativeComments = filtered.filter(c => negativeWords.some(w => String(c.content || '').includes(w)));
+
+  // Build full comments list (no truncation)
+  const commentList = filtered.map((c) => {
+    const ts = Number(c.timestamp || 0);
+    const timeStr = ts > 0 ? formatTimestamp(ts) : '--:--:--';
+    const userTag = c.isNewUser ? '[新]' : '[老]';
+    return `${timeStr} ${userTag}${c.nickname || '匿名'}: ${c.content}`;
+  }).join('\n');
+
+  return `
+【评论统计】
+- 总评论数: ${filtered.length}
+- 正面情绪: ${positiveCnt}条 (${((positiveCnt / filtered.length) * 100).toFixed(1)}%)
+- 负面情绪: ${negativeCnt}条 (${((negativeCnt / filtered.length) * 100).toFixed(1)}%)
+- 提问类: ${questionCnt}条 (${((questionCnt / filtered.length) * 100).toFixed(1)}%)
+
+【问题归类】
+- 价格相关: ${priceQ}条
+- 效果/质量相关: ${qualityQ}条
+- 物流相关: ${shippingQ}条
+- 使用方法相关: ${usageQ}条
+
+【高频关键词Top30】
+${topKeywords || '无'}
+
+${negativeComments.length > 0 ? `【负面预警】\n${negativeComments.slice(0, 20).map(c => {
+  const ts = Number(c.timestamp || 0);
+  const timeStr = ts > 0 ? formatTimestamp(ts) : '--:--:--';
+  return `⚠ ${timeStr} ${c.nickname || '匿名'}: ${c.content}`;
+}).join('\n')}` : '【负面预警】无明显负面信号'}
+
+【全部评论(共${filtered.length}条)】
+${commentList}
+`;
+}
+
 function buildAnalysisPrompt(
   skillContent: string,
   snapshotData: Record<string, unknown>[],
@@ -788,91 +1008,13 @@ function buildAnalysisPrompt(
     windowStart = new Date(snapshotTime.getTime() - 30 * 60 * 1000);
   }
 
-  // Build comprehensive data for each snapshot
-  const dataSummary = snapshotData.map((snap, idx) => {
-    const rawJson = (snap.rawJson ?? snap.raw_json) as Record<string, unknown> | null;
-    if (!rawJson) return '';
+  // Build analysis instruction (concise, without full data)
+  const dataMarkdown = buildAnalysisDataMarkdown(snapshotData, reportType, segmentSeq);
 
-    const analysis = (rawJson.analysis as Record<string, unknown>) || {};
-    const newoldData = (rawJson.newoldData as Record<string, string>) || {};
-    const chartData = (rawJson.chartData as Record<string, unknown>) || {};
-    const comments = (rawJson.comments as Record<string, unknown>[]) || [];
-    const orderDetails = (rawJson.orderDetails as Record<string, unknown>[]) || [];
-    const orderSummary = (rawJson.orderSummary as Record<string, unknown>) || {};
-    const transcription = snap.transcription as string | null;
-    // 对转写文字做内容审核过滤（双保险，防止数据库中已有的未过滤内容）
-    const filteredTranscription = transcription ? filterContent(transcription).filtered : null;
-
-    // Core metrics from analysis
-    const onlineCount = analysis.peakConcurrentViewers || 'N/A';
-    const avgOnline = chartData.onlineUserCntList
-      ? Math.round((chartData.onlineUserCntList as number[]).reduce((a: number, b: number) => a + b, 0) / (chartData.onlineUserCntList as number[]).length)
-      : 'N/A';
-    const watcherCnt = analysis.watcherCnt || 'N/A';
-    const viewCnt = analysis.viewCnt || 'N/A';
-    const commentCnt = analysis.commentCnt || 'N/A';
-    const commenterCnt = analysis.commenterCnt || 'N/A';
-    const interactionRate = analysis.interactionRate || 'N/A';
-    const productClickCnt = analysis.productClickCnt || 'N/A';
-    const mallPageViewCnt = analysis.mallPageViewCnt || 'N/A';
-    const transactionAmount = analysis.transactionAmount || orderSummary.totalAmount || 'N/A';
-    const transactionCnt = analysis.transactionCnt || orderSummary.paySuccessTotal || 'N/A';
-    const payUserCnt = analysis.payUserCnt || orderSummary.payUserTotal || 'N/A';
-    const avgWatchTime = analysis.avgWatchTime || 'N/A';
-
-    // Segment-specific: use avg online for this window, not peak
-    const displayOnline = reportType === REPORT_TYPE.FINAL ? onlineCount : avgOnline;
-
-    return `
---- 片段 ${idx + 1} (快照时间: ${snap.snapshotTime ?? snap.snapshot_time}) ---
-
-【核心指标】
-当前/峰值在线人数: ${displayOnline}${reportType !== REPORT_TYPE.FINAL ? ` (平均${avgOnline})` : ''}
-累计观看人数: ${watcherCnt}
-累计观看人次: ${viewCnt}
-评论数: ${commentCnt}
-评论人数: ${commenterCnt}
-互动率: ${interactionRate}%
-商品点击次数: ${productClickCnt}
-商城浏览次数: ${mallPageViewCnt}
-成交总额: ¥${transactionAmount}
-成交单数: ${transactionCnt}
-支付人数: ${payUserCnt}
-人均产值(成交/场观): ${Number(watcherCnt) > 0 && Number(transactionAmount) > 0 ? '¥' + (Number(transactionAmount) / Number(watcherCnt)).toFixed(2) : 'N/A'}
-平均观看时长: ${avgWatchTime}秒
-
-${filteredTranscription ? `【主播语音转写】\n${filteredTranscription.substring(0, 5000)}${filteredTranscription.length > 5000 ? '\n...（转写文字过长已截断）' : ''}\n` : '【主播语音转写】暂无转写数据'}
-
-${buildNewoldData(newoldData)}
-
-【时间曲线数据】
-${extractChartWindow(chartData, windowStart, windowEnd)}
-
-【商品漏斗数据(点击→下单→支付)】
-${buildGoodsFunnel(orderDetails)}
-
-【评论舆情数据】
-${buildCommentsData(comments, windowStart, windowEnd)}
-`;
-  }).join('\n');
-
-  // For final analysis, collect all transcriptions into a complete script
-  let fullScript = '';
-  if (reportType === REPORT_TYPE.FINAL) {
-    const transcriptions = snapshotData
-      .map((snap, idx) => {
-        const t = snap.transcription as string | null;
-        // 对转写文字做内容审核过滤
-        const filtered = t ? filterContent(t).filtered : null;
-        return filtered ? `[片段${idx + 1}] ${filtered}` : '';
-      })
-      .filter(Boolean)
-      .join('\n\n');
-    if (transcriptions) {
-      const trimmed = transcriptions.length > 15000 ? transcriptions.substring(0, 15000) + '\n...（脚本过长已截断）' : transcriptions;
-      fullScript = `\n【整场直播完整脚本】\n${trimmed}\n`;
-    }
-  }
+  // Build concise summary for the system prompt (reuse lastSnap from above)
+  const rawJson = (lastSnap?.rawJson ?? lastSnap?.raw_json) as Record<string, unknown> | null;
+  const analysis = (rawJson?.analysis as Record<string, unknown>) || {};
+  const summaryLine = `在线${analysis.peakConcurrentViewers || 'N/A'} | 观看${analysis.watcherCnt || 'N/A'} | 评论${analysis.commentCnt || 'N/A'} | 成交¥${analysis.transactionAmount || 'N/A'}`;
 
   return `${skillContent}
 
@@ -880,11 +1022,18 @@ ${buildCommentsData(comments, windowStart, windowEnd)}
 
 ## 当前分析任务
 
-请对以下直播数据进行**${typeLabel}分析**。
+请对以下直播数据进行**${typeLabel}分析**。完整数据见附件。
 
-${historicalContext ? `${historicalContext}\n\n---\n\n` : ''}${dataSummary}
-${fullScript}
-${previousSessionComparison ? `\n---\n\n${previousSessionComparison}\n` : ''}${benchmarkAnchorData ? `\n---\n\n${benchmarkAnchorData}\n` : ''}
+**关键指标速览**: ${summaryLine}
+
+${historicalContext ? `${historicalContext}\n\n---\n\n` : ''}
+${previousSessionComparison ? `${previousSessionComparison}\n---\n\n` : ''}${benchmarkAnchorData ? `${benchmarkAnchorData}\n---\n\n` : ''}
+---
+
+## 附件：完整直播数据
+
+${dataMarkdown}
+
 ---
 
 请严格按照上述五维分析框架输出分析结果。每个维度需包含：
@@ -917,12 +1066,15 @@ ${previousSessionComparison ? '- 与前一场对比时标注【前场对比】' 
  * 采用多模型并发调用策略：发送请求给多个模型，返回最先完成且成功的结果
  */
 async function callLLMAnalysis(prompt: string): Promise<string> {
-  // 限制 prompt 长度，防止超出模型 token 上限（128K chars ≈ 32K tokens）
-  const MAX_PROMPT_LENGTH = 80000;
+  // 256k 上下文模型支持约 640K chars，其他模型约 128K chars
+  // 使用 md 格式组织完整数据发送给 AI，不再截断
+  const MAX_PROMPT_LENGTH = 600000;
   let effectivePrompt = prompt;
   if (prompt.length > MAX_PROMPT_LENGTH) {
     console.warn(`[Analyzer] Prompt 过长 (${prompt.length} chars)，截断到 ${MAX_PROMPT_LENGTH}`);
     effectivePrompt = prompt.substring(0, MAX_PROMPT_LENGTH) + '\n\n[注意：数据已因长度限制截断，请基于已有数据进行分析]';
+  } else {
+    console.log(`[Analyzer] Prompt 长度: ${prompt.length} chars (完整数据，不截断)`);
   }
 
   const messages = [
@@ -936,11 +1088,12 @@ async function callLLMAnalysis(prompt: string): Promise<string> {
     },
   ];
 
-  // 定义模型调用策略：使用 coze-coding-dev-sdk 支持的所有模型，并发调用，谁先返回用谁
+  // 定义模型调用策略：优先使用 256k 长上下文模型，其他模型作为备选并发调用
+  // 256k 模型可以接收完整 markdown 数据文件，不截断
   const modelsToTry = [
+    { model: 'doubao-seed-2-0-mini-260215', name: 'Doubao Mini (256k)' },   // 256k 上下文，成本低
     { model: 'doubao-seed-2-0-pro-260215', name: 'Doubao Pro' },
     { model: 'doubao-seed-2-0-lite-260215', name: 'Doubao Lite' },
-    { model: 'doubao-seed-2-0-mini-260215', name: 'Doubao Mini' },
     { model: 'doubao-seed-1-8-251228', name: 'Doubao 1.8' },
     { model: 'deepseek-v3-2-251201', name: 'DeepSeek V3' },
     { model: 'kimi-k2-5-260127', name: 'Kimi K2' },
@@ -1806,8 +1959,15 @@ async function _runAnalysisImpl(
     ]);
   }
 
-  // 构建分析 Prompt
-  const prompt = buildAnalysisPrompt(
+  // 构建完整数据 Markdown（不截断，作为附件发送给 AI）
+  const dataMarkdown = buildAnalysisDataMarkdown(
+    analysisSnapshots.length > 0 ? analysisSnapshots : snapshots,
+    reportType,
+    segmentSeq
+  );
+
+  // 构建分析指令 Prompt（不含完整数据）
+  const analysisPrompt = buildAnalysisPrompt(
     skill.content,
     analysisSnapshots.length > 0 ? analysisSnapshots : snapshots,
     reportType,
@@ -1817,17 +1977,22 @@ async function _runAnalysisImpl(
     benchmarkAnchorData
   );
 
+  // 合并为完整 prompt：指令 + 完整数据附件
+  const fullPrompt = `${analysisPrompt}\n\n---\n\n# 直播数据附件\n\n${dataMarkdown}`;
+
+  console.log(`[runAnalysis] Prompt 组装完成: 指令=${analysisPrompt.length}字符, 数据附件=${dataMarkdown.length}字符, 合计=${fullPrompt.length}字符`);
+
   // 调用 LLM 分析（内容审核拒绝时加强过滤后重试一次）
   let analysisText: string;
   try {
-    analysisText = await callLLMAnalysis(prompt);
+    analysisText = await callLLMAnalysis(fullPrompt);
   } catch (llmError: unknown) {
     const errMsg = llmError instanceof Error ? llmError.message : String(llmError);
     // 如果因内容审核失败，加强过滤后重试一次
     if (errMsg.includes('DataInspectionFailed') || errMsg.includes('inappropriate content') || errMsg.includes('低俗') || errMsg.includes('色情')) {
       console.log(`[runAnalysis] LLM内容审核拒绝，加强过滤后重试...`);
       // 对 prompt 做一次更激进的过滤
-      const aggressiveFiltered = filterContent(prompt, true);
+      const aggressiveFiltered = filterContent(fullPrompt, true);
       try {
         analysisText = await callLLMAnalysis(aggressiveFiltered.filtered);
       } catch (retryError: unknown) {
