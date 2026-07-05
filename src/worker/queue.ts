@@ -191,7 +191,7 @@ export class JobQueue {
       .eq('id', jobId)
       .single();
       
-    const currentRetry = (data?.retry_count || 0) + 1;
+    const currentRetry = ((data?.retryCount ?? data?.retry_count) || 0) + 1;
     
     await client.from('background_jobs')
       .update({

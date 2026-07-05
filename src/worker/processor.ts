@@ -103,7 +103,7 @@ export class WorkerProcessor {
         
         if (job) {
           this.currentJob = job;
-          console.log(`[WorkerProcessor] Processing job ${job.id} of type ${job.job_type}`);
+          console.log(`[WorkerProcessor] Processing job ${job.id} of type ${job.jobType || job.job_type}`);
           
           await this.executeJob(job);
           
@@ -125,7 +125,12 @@ export class WorkerProcessor {
       let result = null;
 
       // 根据任务类型动态导入和执行相应的处理函数
-      switch (job.job_type) {
+      // 兼容 camelCase（DbQueryBuilder 自动转换）和 snake_case
+      const jobType = job.jobType || job.job_type;
+      const sessionId = job.sessionId || job.session_id;
+      const segmentSeq = job.segmentSeq || job.segment_seq;
+
+      switch (jobType) {
         case 'monitor':
           const { pollLiveStatus } = await import('@/lib/server/monitor');
           await pollLiveStatus();
@@ -133,21 +138,20 @@ export class WorkerProcessor {
           
         case 'record':
           const { autoStartRecording } = await import('@/lib/server/recorder');
-          await autoStartRecording(payload.roomId, job.session_id, payload.roomName);
+          await autoStartRecording(payload.roomId, sessionId, payload.roomName);
           break;
           
         case 'transcribe':
           const { transcribeAudio } = await import('@/lib/server/transcribe-worker');
-          await transcribeAudio(payload.audioUrl, job.session_id, job.segment_seq);
+          await transcribeAudio(payload.audioUrl, sessionId, segmentSeq);
           break;
           
         case 'analysis':
         case 'final_analysis':
           const { runAnalysis } = await import('@/lib/server/analyzer');
-          const isFinal = job.job_type === 'final_analysis' || payload.isFinal;
-          result = await runAnalysis(job.session_id, payload.roomId, job.segment_seq, isFinal ? 'final' : 'segment');
+          const isFinal = jobType === 'final_analysis' || payload.isFinal;
+          result = await runAnalysis(sessionId, payload.roomId, segmentSeq, isFinal ? 'final' : 'segment');
           if (isFinal) {
-            // 假设我们在终场分析完成后触发知识库质量控制
             const { runKnowledgeQualityControl } = await import('@/lib/server/knowledge-quality');
             await runKnowledgeQualityControl();
           }
@@ -161,13 +165,11 @@ export class WorkerProcessor {
           
         case 'snapshot':
           const { fetchAllSnapshotData } = await import('@/lib/server/fetcher');
-          result = await fetchAllSnapshotData(job.session_id, payload.roomId, job.segment_seq);
+          result = await fetchAllSnapshotData(sessionId, payload.roomId, segmentSeq);
           break;
-          
 
-          
         default:
-          throw new Error(`Unknown job type: ${job.job_type}`);
+          throw new Error(`Unknown job type: ${jobType}`);
       }
 
       // 任务成功完成
