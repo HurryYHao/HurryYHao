@@ -8,25 +8,25 @@ import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 
 interface LiveSession {
-  room_name: string;
-  anchor_name: string;
-  start_time: string;
+  roomName: string;
+  anchorName: string;
+  startTime: string;
 }
 
 interface Alert {
   id: number;
-  session_id: number;
-  alert_type: string;
+  sessionId: number;
+  alertType: string;
   severity: 'low' | 'medium' | 'high' | 'critical' | 'warning';
   title: string;
   description: string;
   evidence: any;
   suggestion: string;
   status: 'open' | 'resolved' | 'auto_resolved';
-  triggered_at: string;
-  resolved_at: string | null;
-  offset_minutes: number | null;
-  live_sessions?: LiveSession;
+  triggeredAt: string;
+  resolvedAt: string | null;
+  offsetMinutes: number | null;
+  session?: LiveSession;
 }
 
 export default function AlertsPage() {
@@ -34,7 +34,7 @@ export default function AlertsPage() {
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   const fetchAlerts = useCallback(async () => {
     try {
@@ -101,9 +101,9 @@ export default function AlertsPage() {
 
   const formatLiveTime = (alert: Alert) => {
     // 优先显示直播相对时间
-    if (alert.offset_minutes !== null && alert.offset_minutes !== undefined) {
-      const hours = Math.floor(alert.offset_minutes / 60);
-      const mins = alert.offset_minutes % 60;
+    if (alert.offsetMinutes !== null && alert.offsetMinutes !== undefined) {
+      const hours = Math.floor(alert.offsetMinutes / 60);
+      const mins = alert.offsetMinutes % 60;
       if (hours > 0) {
         return `直播第 ${hours}小时${mins > 0 ? mins + '分' : ''}`;
       }
@@ -111,9 +111,9 @@ export default function AlertsPage() {
     }
     // 回退到绝对时间
     try {
-      return format(new Date(alert.triggered_at), 'MM-dd HH:mm:ss', { locale: zhCN });
+      return format(new Date(alert.triggeredAt), 'MM-dd HH:mm:ss', { locale: zhCN });
     } catch {
-      return alert.triggered_at;
+      return alert.triggeredAt || '未知时间';
     }
   };
 
@@ -144,9 +144,11 @@ export default function AlertsPage() {
             <RefreshCw className="w-3.5 h-3.5" />
             刷新
           </button>
-          <span className="text-xs text-muted-foreground">
-            上次更新: {format(lastRefresh, 'HH:mm:ss')}
-          </span>
+          {lastRefresh && (
+            <span className="text-xs text-muted-foreground">
+              上次更新: {format(lastRefresh, 'HH:mm:ss')}
+            </span>
+          )}
         </div>
       </div>
 
@@ -259,13 +261,15 @@ export default function AlertsPage() {
                             <Clock className="w-3.5 h-3.5" />
                             {formatLiveTime(alert)}
                           </span>
-                          <span className="text-xs">
-                            ({format(new Date(alert.triggered_at), 'MM-dd HH:mm:ss', { locale: zhCN })})
-                          </span>
-                          {alert.live_sessions && (
+                          {alert.triggeredAt && (
+                            <span className="text-xs">
+                              ({format(new Date(alert.triggeredAt), 'MM-dd HH:mm:ss', { locale: zhCN })})
+                            </span>
+                          )}
+                          {alert.session && (
                             <span className="flex items-center gap-1">
-                              {alert.live_sessions.room_name}
-                              {alert.live_sessions.anchor_name && ` - ${alert.live_sessions.anchor_name}`}
+                              {alert.session.roomName}
+                              {alert.session.anchorName && ` - ${alert.session.anchorName}`}
                             </span>
                           )}
                         </div>

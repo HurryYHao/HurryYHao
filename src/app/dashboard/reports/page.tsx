@@ -14,16 +14,16 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 
 interface Session {
-  id: number; room_id: string; room_name: string | null; status: string;
-  start_time: string | null; end_time: string | null; anchor_name: string | null;
-  template_name: string | null; room_type: string | null;
+  id: number; roomId: string; roomName: string | null; status: string;
+  startTime: string | null; endTime: string | null; anchorName: string | null;
+  templateName: string | null; roomType: string | null;
 }
 interface Report {
-  id: number; session_id: number; report_type: string; segment_seq: number | null;
-  analysis_text: string | null; skill_version: string | null; created_at: string;
-  anchor_name: string | null; template_name: string | null; room_type: string | null;
-  overall_score?: number; anchor_score?: number; interaction_score?: number;
-  conversion_score?: number; sentiment_score?: number; rhythm_score?: number;
+  id: number; sessionId: number; reportType: string; segmentSeq: number | null;
+  analysisText: string | null; skillVersion: string | null; createdAt: string;
+  anchorName: string | null; templateName: string | null; roomType: string | null;
+  overallScore?: number; anchorScore?: number; interactionScore?: number;
+  conversionScore?: number; sentimentScore?: number; rhythmScore?: number;
 }
 
 const DIMENSIONS = [
@@ -102,7 +102,7 @@ export default function ReportsPage() {
   // 使用单独的effect设置默认选择
   useEffect(() => {
     if (sessions.length > 0 && !selectedAnchor) {
-      const firstAnchor = sessions[0].anchor_name || '未知主播';
+      const firstAnchor = sessions[0].anchorName || '未知主播';
       console.log('[Reports] 自动设置anchor:', firstAnchor);
       setSelectedAnchor(firstAnchor);
       setSelectedSession(sessions[0]);
@@ -120,7 +120,7 @@ export default function ReportsPage() {
 
   // 按主播分组
   const anchorGroups = sessions.reduce<Record<string, Session[]>>((acc, s) => {
-    const anchor = s.anchor_name || '未知主播';
+    const anchor = s.anchorName || '未知主播';
     if (!acc[anchor]) acc[anchor] = [];
     acc[anchor].push(s);
     return acc;
@@ -213,11 +213,11 @@ export default function ReportsPage() {
                         className={`p-3 rounded-lg border cursor-pointer transition-colors ${selectedSession?.id === s.id ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'}`}
                       >
                         <div className="flex items-center gap-2">
-                          <span className="font-medium text-sm truncate flex-1">{s.room_name || s.template_name || s.room_id}</span>
+                          <span className="font-medium text-sm truncate flex-1">{s.roomName || s.templateName || s.roomId}</span>
                           <Badge variant="outline" className="text-xs shrink-0">{s.status}</Badge>
                         </div>
                         <div className="text-xs text-muted-foreground mt-1">
-                          {s.start_time ? new Date(s.start_time).toLocaleString('zh-CN') : '--'}
+                          {s.startTime ? new Date(s.startTime).toLocaleString('zh-CN') : '--'}
                         </div>
                       </div>
                     ))}
@@ -233,7 +233,7 @@ export default function ReportsPage() {
           <Card className="flex flex-col flex-1">
             <CardHeader className="pb-2 shrink-0">
               <CardTitle className="text-base">
-                {selectedSession ? `${selectedSession.room_name || selectedSession.template_name || selectedSession.room_id} 的报告` : '请选择会话'}
+                {selectedSession ? `${selectedSession.roomName || selectedSession.templateName || selectedSession.roomId} 的报告` : '请选择会话'}
               </CardTitle>
             </CardHeader>
             <CardContent className="flex-1 min-h-0">
@@ -260,35 +260,35 @@ export default function ReportsPage() {
                       >
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
-                            {report.report_type === 'final' ? (
+                            {report.reportType === 'final' ? (
                               <Badge className="bg-primary text-primary-foreground text-xs">终场分析</Badge>
                             ) : (
-                              <Badge variant="outline" className="text-xs">片段 #{report.segment_seq || '?'}</Badge>
+                              <Badge variant="outline" className="text-xs">片段 #{report.segmentSeq || '?'}</Badge>
                             )}
                             <span className="text-xs text-muted-foreground">
-                              {new Date(report.created_at).toLocaleString('zh-CN')}
+                              {new Date(report.createdAt).toLocaleString('zh-CN')}
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
                             {/* 综合评分 */}
-                            {report.overall_score && (
+                            {report.overallScore && (
                               <Badge variant="outline" className="text-xs font-bold">
                                 <Star className="h-3 w-3 mr-1 text-primary" />
-                                {report.overall_score.toFixed(1)}
+                                {report.overallScore.toFixed(1)}
                               </Badge>
                             )}
-                            <span className="text-xs text-muted-foreground">v{report.skill_version || '?'}</span>
+                            <span className="text-xs text-muted-foreground">v{report.skillVersion || '?'}</span>
                           </div>
                         </div>
                         {/* 五维评分条 */}
-                        {report.overall_score && (
+                        {report.overallScore && (
                           <div className="flex gap-1 mb-2">
                             {[
-                              { key: 'anchor_score', label: '话术', color: 'var(--chart-1)' },
-                              { key: 'interaction_score', label: '互动', color: 'var(--chart-2)' },
-                              { key: 'conversion_score', label: '转化', color: 'var(--chart-3)' },
-                              { key: 'sentiment_score', label: '舆情', color: 'var(--chart-4)' },
-                              { key: 'rhythm_score', label: '节奏', color: 'var(--chart-5)' },
+                              { key: 'anchorScore', label: '话术', color: 'var(--chart-1)' },
+                              { key: 'interactionScore', label: '互动', color: 'var(--chart-2)' },
+                              { key: 'conversionScore', label: '转化', color: 'var(--chart-3)' },
+                              { key: 'sentimentScore', label: '舆情', color: 'var(--chart-4)' },
+                              { key: 'rhythmScore', label: '节奏', color: 'var(--chart-5)' },
                             ].map(dim => {
                               const score = report[dim.key as keyof Report] as number;
                               return score ? (
@@ -312,10 +312,10 @@ export default function ReportsPage() {
                         )}
                         {/* 报告内容预览：展示前300字符，点击查看完整 */}
                         <div className="text-sm text-muted-foreground">
-                          {report.analysis_text ? (
+                          {report.analysisText ? (
                             <div className="relative">
                               <p className="line-clamp-4">
-                                {report.analysis_text.replace(/^#+\s*/gm, '').replace(/---/g, '').replace(/\n{2,}/g, '\n').slice(0, 300)}
+                                {report.analysisText.replace(/^#+\s*/gm, '').replace(/---/g, '').replace(/\n{2,}/g, '\n').slice(0, 300)}
                               </p>
                               <span className="text-primary text-xs ml-1 hover:underline">点击查看完整报告 →</span>
                             </div>
@@ -338,23 +338,23 @@ export default function ReportsPage() {
         <DialogContent className="max-w-3xl max-h-[80vh]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 flex-wrap">
-              {selectedReport?.report_type === 'final' ? (
+              {selectedReport?.reportType === 'final' ? (
                 <Badge className="bg-primary text-primary-foreground">终场分析</Badge>
               ) : (
-                <Badge variant="outline">片段 #{selectedReport?.segment_seq}</Badge>
+                <Badge variant="outline">片段 #{selectedReport?.segmentSeq}</Badge>
               )}
               分析报告
-              {selectedReport?.template_name && (
-                <Badge className="bg-secondary text-secondary-foreground">{selectedReport.template_name}</Badge>
+              {selectedReport?.templateName && (
+                <Badge className="bg-secondary text-secondary-foreground">{selectedReport.templateName}</Badge>
               )}
-              {selectedReport?.anchor_name && (
-                <Badge variant="outline" className="text-xs">{selectedReport.anchor_name}</Badge>
+              {selectedReport?.anchorName && (
+                <Badge variant="outline" className="text-xs">{selectedReport.anchorName}</Badge>
               )}
             </DialogTitle>
           </DialogHeader>
           <ScrollArea className="h-[60vh]">
-            {selectedReport?.analysis_text ? (
-              <RenderMarkdown content={selectedReport.analysis_text} />
+            {selectedReport?.analysisText ? (
+              <RenderMarkdown content={selectedReport.analysisText} />
             ) : (
               <p className="text-center text-muted-foreground py-8">无报告内容</p>
             )}

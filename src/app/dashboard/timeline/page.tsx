@@ -4,16 +4,16 @@ import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Clock, Activity, MessageSquare, ShoppingBag, AlertTriangle, PlayCircle, Search } from 'lucide-react';
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
 
 interface TimelineEvent {
   id: number;
-  session_id: number;
+  sessionId: number;
   timestamp: string;
-  offset_seconds: number;
-  event_type: string;
+  offsetSeconds: number;
+  eventType: string;
   content: string;
   metrics: any;
   source: string;
@@ -21,16 +21,16 @@ interface TimelineEvent {
 }
 
 interface MinuteMetric {
-  minute_index: number;
-  online_count: number;
-  comment_count: number;
-  order_count: number;
-  paid_count: number;
-  paid_amount: number;
+  minuteIndex: number;
+  onlineCount: number;
+  commentCount: number;
+  orderCount: number;
+  paidCount: number;
+  paidAmount: number;
 }
 
 export default function TimelinePage() {
-  const [sessions, setSessions] = useState<{id: number, room_name: string, start_time: string}[]>([]);
+  const [sessions, setSessions] = useState<{id: number, roomName: string, startTime: string}[]>([]);
   const [selectedSession, setSelectedSession] = useState<string>('');
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [metrics, setMetrics] = useState<MinuteMetric[]>([]);
@@ -44,7 +44,6 @@ export default function TimelinePage() {
         const res = await fetch('/api/sessions');
         if (res.ok) {
           const data = await res.json();
-          // 处理两种可能的格式：data.data.sessions 或直接 data.data
           let sessions = [];
           if (data.data?.sessions && Array.isArray(data.data.sessions)) {
             sessions = data.data.sessions;
@@ -102,6 +101,17 @@ export default function TimelinePage() {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
+  const safeFormatDate = (dateStr: string | null | undefined) => {
+    if (!dateStr) return '未知时间';
+    try {
+      const d = parseISO(dateStr);
+      if (isNaN(d.getTime())) return '未知时间';
+      return format(d, 'MM-dd HH:mm');
+    } catch {
+      return '未知时间';
+    }
+  };
+
   const filteredEvents = events.filter(e => filterSource === 'all' || e.source === filterSource);
 
   return (
@@ -113,7 +123,7 @@ export default function TimelinePage() {
             统一直播时间轴
           </h1>
           <p className="text-muted-foreground mt-2">
-            将业务指标、评论、话术、预警与 AI 动作映射到统一时间轴，精准归因“哪个动作导致了哪个结果”。
+            将业务指标、评论、话术、预警与 AI 动作映射到统一时间轴，精准归因"哪个动作导致了哪个结果"。
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -124,7 +134,7 @@ export default function TimelinePage() {
           >
             {sessions.map(s => (
               <option key={s.id} value={s.id}>
-                {s.room_name} ({format(new Date(s.start_time), 'MM-dd HH:mm')})
+                {s.roomName} ({safeFormatDate(s.startTime)})
               </option>
             ))}
             {sessions.length === 0 && <option value="">暂无直播场次</option>}
@@ -174,10 +184,10 @@ export default function TimelinePage() {
                     {filteredEvents.map((event, idx) => (
                       <div key={event.id || idx} className="relative flex items-start gap-6 group">
                         <div className="w-10 text-xs font-medium text-muted-foreground pt-1 shrink-0 text-right">
-                          {formatOffset(event.offset_seconds)}
+                          {formatOffset(event.offsetSeconds)}
                         </div>
                         <div className="absolute left-[34px] w-8 h-8 bg-background border-2 border-border rounded-full flex items-center justify-center z-10 group-hover:border-primary transition-colors">
-                          {getEventIcon(event.source, event.event_type)}
+                          {getEventIcon(event.source, event.eventType)}
                         </div>
                         <div className="flex-1 bg-muted/30 rounded-lg border p-4 group-hover:border-primary/50 group-hover:shadow-sm transition-all ml-4">
                           <div className="flex items-start justify-between gap-4 mb-2">
@@ -203,10 +213,10 @@ export default function TimelinePage() {
                           )}
 
                           {/* 模拟的归因分析 */}
-                          {event.source === 'order' && event.event_type === 'payment_peak' && (
+                          {event.source === 'order' && event.eventType === 'payment_peak' && (
                             <div className="mt-3 p-2 bg-green-500/10 border border-green-500/20 rounded-md text-xs text-green-700 flex items-start gap-1.5">
                               <PlayCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                              <p><strong>AI 归因：</strong>此转化峰值大概率由 2 分钟前（{formatOffset(event.offset_seconds - 120)}）主播抛出的限时福利话术直接促成。</p>
+                              <p><strong>AI 归因：</strong>此转化峰值大概率由 2 分钟前（{formatOffset(event.offsetSeconds - 120)}）主播抛出的限时福利话术直接促成。</p>
                             </div>
                           )}
                         </div>
@@ -233,8 +243,8 @@ export default function TimelinePage() {
                   {metrics.length > 0 ? (
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={metrics.slice(0, 120).map((m) => ({
-                        minute: m.minute_index,
-                        online: m.online_count || 0
+                        minute: m.minuteIndex,
+                        online: m.onlineCount || 0
                       }))}>
                         <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                         <XAxis 
@@ -274,8 +284,8 @@ export default function TimelinePage() {
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={Array.from({ length: Math.ceil(metrics.length / 10) }, (_, i) => {
                         const slice = metrics.slice(i * 10, (i + 1) * 10);
-                        const orders = slice.reduce((sum, m) => sum + (m.order_count || 0), 0);
-                        const paid = slice.reduce((sum, m) => sum + (m.paid_count || 0), 0);
+                        const orders = slice.reduce((sum, m) => sum + (m.orderCount || 0), 0);
+                        const paid = slice.reduce((sum, m) => sum + (m.paidCount || 0), 0);
                         return {
                           period: `${i * 10}-${(i + 1) * 10}分`,
                           orders,
@@ -288,7 +298,7 @@ export default function TimelinePage() {
                         <Tooltip />
                         <Legend wrapperStyle={{ fontSize: 10 }} />
                         <Bar dataKey="orders" fill="hsl(var(--chart-1))" name="下单" />
-                        <Bar dataKey="paid" fill="hsl(var(--chart-2))" name="支付" />
+                        <Bar dataKey="paid" fill="hsl(var(--chart-2))" name="成交" />
                       </BarChart>
                     </ResponsiveContainer>
                   ) : (
@@ -297,30 +307,6 @@ export default function TimelinePage() {
                     </div>
                   )}
                 </div>
-              </div>
-            </CardContent>
-          </Card>
-          
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">时间轴数据源状态</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex items-center justify-between text-sm">
-                <span className="flex items-center gap-2 text-muted-foreground"><Activity className="w-4 h-4"/> 实时指标数据</span>
-                <Badge variant="outline" className="bg-green-50 text-green-600 border-green-200">已同步</Badge>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="flex items-center gap-2 text-muted-foreground"><PlayCircle className="w-4 h-4"/> ASR 语音转写</span>
-                <Badge variant="outline" className="bg-green-50 text-green-600 border-green-200">已同步</Badge>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="flex items-center gap-2 text-muted-foreground"><MessageSquare className="w-4 h-4"/> 评论弹幕</span>
-                <Badge variant="outline" className="bg-green-50 text-green-600 border-green-200">已同步</Badge>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="flex items-center gap-2 text-muted-foreground"><ShoppingBag className="w-4 h-4"/> 订单流水</span>
-                <Badge variant="outline" className="bg-yellow-50 text-yellow-600 border-yellow-200">延迟 2min</Badge>
               </div>
             </CardContent>
           </Card>

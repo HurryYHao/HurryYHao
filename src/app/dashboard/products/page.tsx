@@ -14,9 +14,10 @@ interface ProductProfile {
   total_clicks: number;
   total_orders: number;
   total_paid: number;
-  total_amount: number;
+  totalAmount: number;
   click_to_pay_rate: string;
-  summary_stats?: any;
+  summaryStats?: any;
+  summary?: any;
   best_session?: any;
   worst_session?: any;
   ai_analysis?: string;
@@ -150,7 +151,7 @@ export default function ProductsPage() {
                   <div className="text-right shrink-0">
                     <div className="text-sm text-muted-foreground">累计销售额</div>
                     <div className="text-xl font-bold text-primary">
-                      ¥{product.total_amount.toLocaleString()}
+                      ¥{product.totalAmount.toLocaleString()}
                     </div>
                   </div>
                 </div>
@@ -254,14 +255,14 @@ export default function ProductsPage() {
                 <Card>
                   <CardContent className="p-4">
                     <div className="text-sm text-muted-foreground mb-1">累计上播场次</div>
-                    <div className="text-2xl font-bold">{(productAnalysis.summary_stats || productAnalysis.summary)?.total_sessions}</div>
+                    <div className="text-2xl font-bold">{(productAnalysis.summaryStats || productAnalysis.summary)?.totalSessions}</div>
                   </CardContent>
                 </Card>
                 <Card>
                   <CardContent className="p-4">
                     <div className="text-sm text-muted-foreground mb-1">累计成交金额</div>
                     <div className="text-2xl font-bold text-primary">
-                      ¥{((productAnalysis.summary_stats || productAnalysis.summary)?.total_amount || 0).toLocaleString()}
+                      ¥{((productAnalysis.summary_stats || productAnalysis.summary)?.totalAmount || 0).toLocaleString()}
                     </div>
                   </CardContent>
                 </Card>
@@ -269,7 +270,7 @@ export default function ProductsPage() {
                   <CardContent className="p-4">
                     <div className="text-sm text-muted-foreground mb-1">场均成交</div>
                     <div className="text-2xl font-bold">
-                      ¥{(productAnalysis.summary_stats || productAnalysis.summary)?.avg_amount_per_session}
+                      ¥{(productAnalysis.summary_stats || productAnalysis.summary)?.avgAmountPerSession}
                     </div>
                   </CardContent>
                 </Card>

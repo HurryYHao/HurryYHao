@@ -8,14 +8,14 @@ import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 
 interface AnchorProfile {
-  anchor_name: string;
-  avg_sales: number;
-  avg_viewers: number;
-  avg_online: number;
-  avg_conversion_rate: number;
-  avg_comment_rate: number;
-  avg_score: number;
-  dimension_scores: {
+  anchorName: string;
+  avgSales: number;
+  avgViewers: number;
+  avgOnline: number;
+  avgConversionRate: number;
+  avgCommentRate: number;
+  avgScore: number;
+  dimensionScores: {
     anchor: number;
     interaction: number;
     conversion: number;
@@ -100,15 +100,15 @@ export default function AnchorsPage() {
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           {profiles.map((profile) => (
-            <Card key={profile.anchor_name} className="overflow-hidden">
+            <Card key={profile.anchorName} className="overflow-hidden">
               <CardHeader className="bg-muted/30 border-b pb-4">
                 <div className="flex justify-between items-start">
                   <div className="flex items-center gap-3">
                     <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xl">
-                      {profile.anchor_name.substring(0, 1)}
+                      {profile.anchorName.substring(0, 1)}
                     </div>
                     <div>
-                      <CardTitle className="text-xl">{profile.anchor_name}</CardTitle>
+                      <CardTitle className="text-xl">{profile.anchorName}</CardTitle>
                       <CardDescription className="mt-1">
                         最后更新: {format(new Date(profile.updated_at), 'yyyy-MM-dd HH:mm', { locale: zhCN })}
                       </CardDescription>
@@ -116,7 +116,7 @@ export default function AnchorsPage() {
                   </div>
                   <div className="flex flex-col items-end">
                     <div className="text-sm text-muted-foreground mb-1">综合能力评分</div>
-                    {renderStars(profile.avg_score || 0)}
+                    {renderStars(profile.avgScore || 0)}
                   </div>
                 </div>
               </CardHeader>
@@ -124,19 +124,19 @@ export default function AnchorsPage() {
                 <div className="grid grid-cols-2 md:grid-cols-4 border-b">
                   <div className="p-4 border-r border-b md:border-b-0 flex flex-col items-center justify-center">
                     <div className="text-sm text-muted-foreground mb-1">场均销售额</div>
-                    <div className="font-semibold text-lg">¥{(profile.avg_sales || 0).toLocaleString()}</div>
+                    <div className="font-semibold text-lg">¥{(profile.avgSales || 0).toLocaleString()}</div>
                   </div>
                   <div className="p-4 border-r md:border-b-0 flex flex-col items-center justify-center">
                     <div className="text-sm text-muted-foreground mb-1">场均在线</div>
-                    <div className="font-semibold text-lg">{profile.avg_online || 0}</div>
+                    <div className="font-semibold text-lg">{profile.avgOnline || 0}</div>
                   </div>
                   <div className="p-4 border-r border-b md:border-b-0 flex flex-col items-center justify-center">
                     <div className="text-sm text-muted-foreground mb-1">转化率</div>
-                    <div className="font-semibold text-lg text-primary">{(profile.avg_conversion_rate || 0)}%</div>
+                    <div className="font-semibold text-lg text-primary">{(profile.avgConversionRate || 0)}%</div>
                   </div>
                   <div className="p-4 flex flex-col items-center justify-center">
                     <div className="text-sm text-muted-foreground mb-1">互动率</div>
-                    <div className="font-semibold text-lg text-blue-600">{(profile.avg_comment_rate || 0)}%</div>
+                    <div className="font-semibold text-lg text-blue-600">{(profile.avgCommentRate || 0)}%</div>
                   </div>
                 </div>
 
@@ -155,7 +155,7 @@ export default function AnchorsPage() {
                         { label: '评论舆情', key: 'sentiment', color: 'bg-yellow-500' },
                         { label: '直播节奏', key: 'rhythm', color: 'bg-orange-500' },
                       ].map(dim => {
-                        const score = profile.dimension_scores?.[dim.key as keyof typeof profile.dimension_scores] || 0;
+                        const score = profile.dimensionScores?.[dim.key as keyof typeof profile.dimensionScores] || 0;
                         return (
                           <div key={dim.key} className="flex items-center gap-3">
                             <span className="text-sm w-20 text-muted-foreground">{dim.label}</span>

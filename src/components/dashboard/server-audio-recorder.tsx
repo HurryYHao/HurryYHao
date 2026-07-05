@@ -25,7 +25,7 @@ interface AudioSegment {
   mtime: string;
   transcription?: string;
   transcribing?: boolean;
-  transcribe_status?: string;
+  transcribeStatus?: string;
   segmentSeq?: number;
 }
 
@@ -431,14 +431,14 @@ export default function ServerAudioRecorder({ roomId, sessionId, roomName }: Ser
                       <Badge variant="outline" className="text-[10px]">
                         {formatSize(seg.size)}
                       </Badge>
-                      {seg.transcribe_status && (
+                      {seg.transcribeStatus && (
                         <Badge 
-                          variant={seg.transcribe_status === 'success' ? 'default' : seg.transcribe_status === 'pending' ? 'outline' : 'destructive'} 
+                          variant={seg.transcribeStatus === 'success' ? 'default' : seg.transcribeStatus === 'pending' ? 'outline' : 'destructive'} 
                           className="text-[10px]"
                         >
-                          {seg.transcribe_status === 'success' ? '转写完成' : 
-                           seg.transcribe_status === 'pending' ? '等待转写' : 
-                           seg.transcribe_status === 'failed' ? '转写失败' : seg.transcribe_status}
+                          {seg.transcribeStatus === 'success' ? '转写完成' : 
+                           seg.transcribeStatus === 'pending' ? '等待转写' : 
+                           seg.transcribeStatus === 'failed' ? '转写失败' : seg.transcribeStatus}
                         </Badge>
                       )}
                     </div>
@@ -461,10 +461,10 @@ export default function ServerAudioRecorder({ roomId, sessionId, roomName }: Ser
                     variant="ghost"
                     className="h-7 w-7 shrink-0"
                     onClick={() => transcribeSegment(seg)}
-                    disabled={transcribingSegments.has(seg.filename) || seg.transcribe_status === 'success'}
+                    disabled={transcribingSegments.has(seg.filename) || seg.transcribeStatus === 'success'}
                     title="转写为文字"
                   >
-                    {transcribingSegments.has(seg.filename) || seg.transcribe_status === 'pending' ? (
+                    {transcribingSegments.has(seg.filename) || seg.transcribeStatus === 'pending' ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
                       <FileText className="h-3.5 w-3.5" />

@@ -22,23 +22,23 @@ interface KnowledgeItem {
   value: string;
   source: string | null;
   confidence: number;
-  sample_count: number;
+  sampleCount: number;
   status?: string;
-  decay_score?: number;
-  last_validated_at: string | null;
-  created_at: string;
+  decayScore?: number;
+  lastValidatedAt: string | null;
+  createdAt: string;
 }
 
 interface ScriptItem {
   id: number;
-  session_date: string;
-  anchor_name: string;
+  sessionDate: string;
+  anchorName: string;
   keywords: string | null;
-  content_points: string | null;
-  product_list: string | null;
-  transaction_data: string | null;
+  contentPoints: string | null;
+  productList: string | null;
+  transactionData: string | null;
   source: string | null;
-  created_at: string;
+  createdAt: string;
 }
 
 interface ChatMessage {
@@ -447,7 +447,7 @@ export default function KnowledgePage() {
                               {item.status === 'active' ? '生效中' : item.status === 'weakened' ? '已弱化' : '已归档'}
                             </Badge>
                           )}
-                          <span className="text-xs text-muted-foreground">样本{item.sample_count}</span>
+                          <span className="text-xs text-muted-foreground">样本{item.sampleCount}</span>
                         </div>
                         <div className="font-medium text-sm">{item.key}</div>
                         <div className="text-sm text-muted-foreground mt-0.5 line-clamp-2">{item.value}</div>
@@ -477,9 +477,9 @@ export default function KnowledgePage() {
                 <Card key={script.id}>
                   <CardHeader className="py-3 px-4">
                     <div className="flex items-center justify-between">
-                      <CardTitle className="text-base font-semibold">{script.session_date}</CardTitle>
+                      <CardTitle className="text-base font-semibold">{script.sessionDate}</CardTitle>
                       <div className="flex items-center gap-2">
-                        <Badge variant="outline">{script.anchor_name || '未知'}</Badge>
+                        <Badge variant="outline">{script.anchorName || '未知'}</Badge>
                         {script.source && <Badge variant="secondary" className="text-xs">{script.source}</Badge>}
                       </div>
                     </div>
@@ -495,22 +495,22 @@ export default function KnowledgePage() {
                         </div>
                       </div>
                     )}
-                    {script.content_points && (
+                    {script.contentPoints && (
                       <div>
                         <div className="text-xs font-medium text-muted-foreground mb-1">内容要点</div>
-                        <div className="text-sm whitespace-pre-wrap">{script.content_points}</div>
+                        <div className="text-sm whitespace-pre-wrap">{script.contentPoints}</div>
                       </div>
                     )}
-                    {script.product_list && (
+                    {script.productList && (
                       <div>
                         <div className="text-xs font-medium text-muted-foreground mb-1">产品清单</div>
-                        <div className="text-sm whitespace-pre-wrap line-clamp-3">{script.product_list}</div>
+                        <div className="text-sm whitespace-pre-wrap line-clamp-3">{script.productList}</div>
                       </div>
                     )}
-                    {script.transaction_data && (
+                    {script.transactionData && (
                       <div>
                         <div className="text-xs font-medium text-muted-foreground mb-1">成交数据</div>
-                        <div className="text-sm font-mono">{script.transaction_data}</div>
+                        <div className="text-sm font-mono">{script.transactionData}</div>
                       </div>
                     )}
                   </CardContent>

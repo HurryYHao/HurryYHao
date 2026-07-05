@@ -6,46 +6,46 @@ import { useState, useEffect, useCallback } from 'react';
 
 export interface LiveSession {
   id: number;
-  room_id: string;
-  room_name: string;
-  live_space_id: string | null;
-  start_time: string | null;
-  end_time: string | null;
+  roomId: string;
+  roomName: string;
+  liveSpaceId: string | null;
+  startTime: string | null;
+  endTime: string | null;
   status: string;
-  last_snapshot_seq: number;
-  error_message: string | null;
-  created_at: string;
+  lastSnapshotSeq: number;
+  errorMessage: string | null;
+  createdAt: string;
 }
 
 export interface SnapshotData {
   id: number;
-  snapshot_seq: number;
-  snapshot_time: string;
-  watcher_cnt: number | null;
-  comment_cnt: number | null;
-  online_user_cnt: number | null;
-  order_total: string | null;
-  order_count: number | null;
-  new_fan_conversion_rate: string | null;
-  old_fan_conversion_rate: string | null;
-  new_fan_pay_count: number | null;
-  old_fan_pay_count: number | null;
+  snapshotSeq: number;
+  snapshotTime: string;
+  watcherCnt: number | null;
+  commentCnt: number | null;
+  onlineUserCnt: number | null;
+  orderTotal: string | null;
+  orderCount: number | null;
+  newFanConversionRate: string | null;
+  oldFanConversionRate: string | null;
+  newFanPayCount: number | null;
+  oldFanPayCount: number | null;
 }
 
 export interface AnalysisReport {
   id: number;
-  session_id: number;
-  report_type: string;
-  segment_seq: number;
-  anchor_analysis: string | null;
-  interaction_analysis: string | null;
-  conversion_analysis: string | null;
-  sentiment_analysis: string | null;
-  rhythm_analysis: string | null;
-  analysis_text: string | null;
-  skill_version: string | null;
-  model_used: string | null;
-  created_at: string;
+  sessionId: number;
+  reportType: string;
+  segmentSeq: number;
+  anchorAnalysis: string | null;
+  interactionAnalysis: string | null;
+  conversionAnalysis: string | null;
+  sentimentAnalysis: string | null;
+  rhythmAnalysis: string | null;
+  analysisText: string | null;
+  skillVersion: string | null;
+  modelUsed: string | null;
+  createdAt: string;
 }
 
 export interface MonitorStatus {

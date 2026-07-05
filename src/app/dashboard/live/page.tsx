@@ -31,7 +31,7 @@ interface LiveData {
   room: RoomInfo; metrics: Metrics; newoldFans: NewoldFans | null;
   goods: Array<Record<string, unknown>>; recentComments: Array<Record<string, unknown>>;
   recentOrders: Array<Record<string, unknown>>; onlineUsers: Array<Record<string, unknown>>;
-  session: { id: number; status: string; start_time: string | null; end_time: string | null; last_snapshot_seq: number } | null;
+  session: { id: number; status: string; startTime: string | null; endTime: string | null; lastSnapshotSeq: number } | null;
   snapshots: Array<Record<string, unknown>>;
 }
 
@@ -454,8 +454,8 @@ function LiveDataPageContent() {
                 <TableBody>
                   {data.snapshots.map((snap, i) => (
                     <TableRow key={i}>
-                      <TableCell className="font-mono text-sm">#{String(snap.snapshot_seq || i + 1)}</TableCell>
-                      <TableCell className="text-xs">{snap.snapshot_time ? new Date(String(snap.snapshot_time)).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '--'}</TableCell>
+                      <TableCell className="font-mono text-sm">#{String(snap.snapshotSeq || i + 1)}</TableCell>
+                      <TableCell className="text-xs">{snap.snapshotTime ? new Date(String(snap.snapshotTime)).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '--'}</TableCell>
                       <TableCell className="font-mono text-sm">{fmtNum(snap.watcher_cnt)}</TableCell>
                       <TableCell className="font-mono text-sm">{fmtNum(snap.online_user_cnt)}</TableCell>
                       <TableCell className="font-mono text-sm">{fmtNum(snap.comment_cnt)}</TableCell>

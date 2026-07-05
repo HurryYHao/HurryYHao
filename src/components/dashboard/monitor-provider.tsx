@@ -7,8 +7,8 @@ import { toast } from 'sonner';
 interface LogEntry { time: string; level: string; message: string; }
 
 interface SessionInfo {
-  id: number; room_id: string; room_name: string | null; status: string;
-  start_time: string | null; end_time: string | null; last_snapshot_seq: number;
+  id: number; roomId: string; roomName: string | null; status: string;
+  startTime: string | null; endTime: string | null; lastSnapshotSeq: number;
 }
 
 interface MonitorState {

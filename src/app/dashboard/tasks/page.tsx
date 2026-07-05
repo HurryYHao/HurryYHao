@@ -9,20 +9,20 @@ import { zhCN } from 'date-fns/locale';
 
 interface Task {
   id: number;
-  session_id: number;
-  report_id: number;
-  anchor_name: string | null;
+  sessionId: number;
+  reportId: number;
+  anchorName: string | null;
   dimension: string;
   title: string;
   description: string;
   priority: 'high' | 'medium' | 'low';
   assignee: string | null;
   status: 'pending' | 'in_progress' | 'done' | 'auto_verified' | 'failed';
-  due_date: string | null;
-  verified_result: string | null;
-  created_at: string;
-  live_sessions?: {
-    room_name: string;
+  dueDate: string | null;
+  verifiedResult: string | null;
+  createdAt: string;
+  liveSessions?: {
+    roomName: string;
   };
 }
 
@@ -183,7 +183,7 @@ export default function TasksPage() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
                       <User className="w-3.5 h-3.5" />
-                      <span>{task.anchor_name || '所有主播'}</span>
+                      <span>{task.anchorName || '所有主播'}</span>
                     </div>
                     <Badge variant="outline" className={getPriorityColor(task.priority)}>
                       {task.priority === 'high' ? '高优先级' : task.priority === 'medium' ? '中优先级' : '低优先级'}
@@ -193,15 +193,15 @@ export default function TasksPage() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
                       <Calendar className="w-3.5 h-3.5" />
-                      <span>来源场次: {task.live_sessions?.room_name || `Session #${task.session_id}`}</span>
+                      <span>来源场次: {task.liveSessions?.roomName || `Session #${task.sessionId}`}</span>
                     </div>
-                    <span>{format(new Date(task.created_at), 'MM-dd', { locale: zhCN })}</span>
+                    <span>{format(new Date(task.createdAt), 'MM-dd', { locale: zhCN })}</span>
                   </div>
 
-                  {task.verified_result && (
+                  {task.verifiedResult && (
                     <div className="mt-3 p-2 bg-muted rounded-md text-foreground">
                       <span className="font-medium text-purple-600 block mb-1">验证结果:</span>
-                      {task.verified_result}
+                      {task.verifiedResult}
                     </div>
                   )}
                 </div>
