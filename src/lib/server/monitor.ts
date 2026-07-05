@@ -1142,7 +1142,7 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
         description: string;
       }> = [];
 
-      // 规则1: 在线人数骤降（超过30%）
+      // 规则1: 在线人数骤降（超过30%）——私域场景：可能是社群活跃度下降或直播内容失去吸引力
       const prevMetrics = await client
         .from('live_metrics_minute')
         .select('online_count')
@@ -1160,21 +1160,21 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
               alertType: 'online_drop',
               severity: 'high',
               title: '在线人数骤降',
-              description: `在线人数从平均${Math.round(avgOnline)}人骤降至${currentData.online}人，降幅${Math.round((1 - currentData.online / avgOnline) * 100)}%，可能存在推流问题或内容吸引力下降`,
+              description: `在线人数从平均${Math.round(avgOnline)}人降至${currentData.online}人，降幅${Math.round((1 - currentData.online / avgOnline) * 100)}%，私域场景下可能是社群活跃度下降或当前内容失去吸引力，建议调整话术节奏或发起互动话题`,
             });
           }
         }
       }
 
-      // 规则2: 互动率低（评论数相对在线人数过低）
-      if (currentData.online > 50 && currentData.comments < currentData.online * 0.05) {
+      // 规则2: 互动率低（评论数相对在线人数过低）——私域直播互动率通常10%-30%，低于5%需关注
+      if (currentData.online > 20 && currentData.comments < currentData.online * 0.05) {
         const alertKey = `low_interaction:互动率偏低`;
         if (!recentAlertTypes.has(alertKey)) {
           newAlerts.push({
             alertType: 'low_interaction',
             severity: 'medium',
             title: '互动率偏低',
-            description: `当前在线${currentData.online}人但评论互动仅${currentData.comments}条，互动率${(currentData.comments / currentData.online * 100).toFixed(1)}%，建议主播增加互动引导`,
+            description: `当前在线${currentData.online}人但评论互动仅${currentData.comments}条，互动率${(currentData.comments / currentData.online * 100).toFixed(1)}%，低于私域正常水平(10%+)，建议主播增加互动引导话术`,
           });
         }
       }
@@ -1198,41 +1198,42 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
               alertType: 'sales_stagnation',
               severity: 'high',
               title: '成交额停滞',
-              description: `近3分钟成交额较前期下降${Math.round((1 - recentSum / olderSum) * 100)}%，建议主播进行商品促单话术`,
+              description: `近3分钟成交额较前期下降${Math.round((1 - recentSum / olderSum) * 100)}%，私密产品决策链长，建议主播加强信任背书和紧迫感话术促单`,
             });
           }
         }
       }
 
-      // 规则4: 新粉占比过高（基于成交人数判断，可能引流人群不精准）
+      // 规则4: 新粉成交占比分析——私域中新粉占比高是社群裂变效果好的正向信号
       const totalFanPay = currentData.newFans + currentData.oldFans;
-      if (totalFanPay > 0) {
+      if (totalFanPay >= 5) {
         const newFanRatio = currentData.newFans / totalFanPay;
-        if (newFanRatio > 0.8 && totalFanPay >= 3) {
-          const alertKey = `fan_imbalance:新粉占比过高`;
+        // 私域场景：新粉占比高是好事（社群裂变好），只在老粉完全不成交时预警
+        if (currentData.oldFans === 0 && currentData.newFans >= 5) {
+          const alertKey = `old_fan_inactive:老粉零成交`;
           if (!recentAlertTypes.has(alertKey)) {
             newAlerts.push({
-              alertType: 'fan_imbalance',
-              severity: 'low',
-              title: '新粉占比过高',
-              description: `成交中新粉占比${(newFanRatio * 100).toFixed(1)}%（${currentData.newFans}/${totalFanPay}），老粉仅${currentData.oldFans}人成交，粉丝粘性较低，建议增加老粉互动环节`,
+              alertType: 'old_fan_inactive',
+              severity: 'medium',
+              title: '老粉零成交',
+              description: `成交全部来自新粉(${currentData.newFans}人)，老粉无一人成交，可能需要加强老粉专属福利或复购话术`,
             });
           }
         }
       }
 
-      // 规则5: 在线人数异常增长（可能被推流，是正向信号）
+      // 规则5: 在线人数显著增长——私域场景：来自社群新邀请/群预告生效，是正向信号
       if (prevMetrics.data && prevMetrics.data.length >= 3) {
         const recentOnline2 = prevMetrics.data.map((m: Record<string, unknown>) => Number(getField(m, 'onlineCount', 'online_count') || 0));
         const avgOnline2 = recentOnline2.reduce((a: number, b: number) => a + b, 0) / recentOnline2.length;
         if (avgOnline2 > 0 && currentData.online > avgOnline2 * 1.5) {
-          const alertKey = `online_surge:在线人数激增`;
+          const alertKey = `online_surge:在线人数增长`;
           if (!recentAlertTypes.has(alertKey)) {
             newAlerts.push({
               alertType: 'online_surge',
               severity: 'low',
-              title: '在线人数激增',
-              description: `在线人数从平均${Math.round(avgOnline2)}人激增至${currentData.online}人，增幅${Math.round((currentData.online / avgOnline2 - 1) * 100)}%，可能获得推流推荐`,
+              title: '在线人数增长',
+              description: `在线人数从平均${Math.round(avgOnline2)}人增至${currentData.online}人，增幅${Math.round((currentData.online / avgOnline2 - 1) * 100)}%，可能是社群引流或群预告生效，建议趁流量高峰推进产品讲解`,
             });
           }
         }
@@ -1242,7 +1243,13 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
       // 每分钟将实时数据发给AI分析，检测规则引擎无法发现的异常
       try {
         const sRoomName = String(getField(session, 'roomName', 'room_name') ?? '未知直播间');
-        const aiPrompt = `你是一个直播数据实时监控AI。请分析以下直播间的1分钟实时数据，判断是否存在异常或需要预警的问题。
+        const aiPrompt = `你是一个私域直播数据实时监控AI。请分析以下直播间的1分钟实时数据，判断是否存在异常或需要预警的问题。
+
+重要背景：
+- 这是私域直播，没有算法推流，观众来自私域社群（微信群/朋友圈/粉丝群），在线人数不会有公域那种爆发式增长
+- 这是私密产品直播（两性健康/私护品类），决策链长、隐私性高，转化率天然低于快消品
+- 私域在线人数波动属正常（社群成员陆续进入），不要把小幅波动当成异常
+- 新粉占比高是社群裂变效果好的正向信号，不是问题
 
 直播间：${sRoomName}
 当前在线：${currentData.online}人，累计观看：${currentData.viewers}次
@@ -1257,9 +1264,10 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
 {"hasAlert":true,"alerts":[{"type":"ai_detected","severity":"high/medium/low","title":"预警标题","description":"详细描述"}]}
 
 注意：
-- 只在确实存在异常时才发出预警，不要过度预警
+- 只在确实存在严重异常时才发出预警，私域数据波动正常，不要过度预警
 - severity: high=严重(需立即处理), medium=中等(需关注), low=轻微(参考)
-- 常见异常：流量异常、转化异常、互动异常、内容问题等`;
+- 真正需要关注的异常：在线骤降超50%且持续、互动率极低(<3%)、成交长时间完全停滞、老粉完全不成交
+- 不需要预警的情况：在线小幅波动、新粉占比高、在线人数缓慢增长`
 
         const { UniversalLLMClient } = await import('./llm-client');
         const llm = new UniversalLLMClient();

@@ -19,35 +19,43 @@ interface FiveDimensionResult {
 
 // ==================== Skill 管理 ====================
 
-const ANALYSIS_FRAMEWORK = `# 直播数据分析框架
+const ANALYSIS_FRAMEWORK = `# 私域直播数据分析框架
 
-你是一位专业的直播数据分析专家。请根据提供的直播数据，从五个维度进行深度分析。
+你是一位专业的**私域直播**数据分析专家。请根据提供的直播数据，从五个维度进行深度分析。
 
-**背景说明**：本场直播为"性商课程"直播，主播以两性情感心理教学为切入点，穿插实操技巧演示，最终引导至产品购买。这是"教学+带货"的混合模式，分析时需要识别每个阶段的话术目的（引流→建立信任→激发需求→促单）。
+**核心背景**：
+1. **这是私域直播，不是公域直播**：没有算法推流、没有自然流量推荐，观众全部来自私域社群（微信群/朋友圈/粉丝群），流量规模远小于公域，不能用公域的流量标准来评判
+2. **这是私密产品的直播**：销售的是两性健康/私护类产品，属于高隐私、高信任需求的品类，转化路径长，用户决策谨慎
+3. **"教学+带货"混合模式**：主播以两性情感心理教学为切入点（痛点共情→心理解读→实操技巧→产品植入），分析时需要识别每个阶段的话术目的（建立信任→激发需求→促单）
+4. **私域的关键指标是粉丝粘性和复购**，不是流量规模。在线人数100-500是私域直播的正常范围，不应用公域千万人标准来评判
+5. **新粉进入渠道是社群邀请**，不是算法推荐；新粉占比高说明社群裂变效果好，是正向信号而非问题
 
 ### 1. 主播话术与内容结构分析
 - 识别直播的典型阶段结构：开场暖场→情感痛点挖掘→心理理论（懂人性/两性差异）→实操技巧演示→产品植入→互动促单→收尾
 - 分析每个阶段的话术策略：痛点共情（"他是不是不主动了"）→ 心理解读（"男人追求征服感"）→ 技巧教学（"教你三步拿回主动权"）→ 产品衔接（"用这个效果更好"）
 - 评估话术的情绪调动能力：从"扎心"到"给方案"的节奏把控
 - 识别高频口头禅与标志性话术
-- **关联话术与数据涨跌：标注哪些话术后流量/成交/互动明显上升或下降**
+- **关联话术与数据涨跌：标注哪些话术后成交/互动明显上升或下降**
 - 对主播共情力与感染力进行评分(1-10)
+- **私域特色**：分析主播如何利用"姐妹"称呼、私域信任感、社群口碑来建立亲密关系
 
 ### 2. 互动热度与观众参与分析
 - 评论量/在线人数时间曲线
-- 互动率（评论数/在线人数）
+- 互动率（评论数/在线人数）——**私域直播互动率通常高于公域，10%-30%属于正常范围**
 - **重点识别"互动引导型"话术**：主播提问"你们选择一还是二""把老公年龄打在公屏上"等触发评论爆发的技巧
 - 高峰低谷拐点识别，**定位互动爆发的具体时间点（精确到分秒），关联对应时段的话术**
 - 观众评论中的高频诉求与情绪信号
 - 标注互动高峰时段与低谷时段
+- **私域特色**：评论是核心互动方式（非弹幕），每条评论都代表真实用户需求
 
 ### 3. 商品转化与销售节奏分析
 - **重点分析"教学→产品"的衔接话术**：主播如何从心理课/实操课自然过渡到产品推荐
 - 分析产品推荐频率与节奏：是集中推荐还是分散穿插
 - 识别"效果暗示"话术：将产品使用效果与两性关系改善关联的表述
-- 新粉/老粉转化率对比
-- 观看→互动→下单→支付漏斗
+- 新粉/老粉转化率对比——**私域中新粉成交多说明社群裂变效果好，是正向信号**
+- 观看→互动→下单→支付漏斗——**私密产品决策链长，每个环节的转化率天然低于快消品**
 - **若下单未支付高则增加逼单话术提示"未支付的订单10分钟后自动关闭，库存有限"**
+- **私域特色**：客单价和复购率比单次成交额更重要；产品是私密品类，用户不会在评论区公开咨询产品细节
 
 ### 4. 评论舆情与观众画像分析
 - **真实用户评论样本情绪正负面分析（基于实际评论内容）**
@@ -56,14 +64,16 @@ const ANALYSIS_FRAMEWORK = `# 直播数据分析框架
 - **需求分层分析**：将评论按需求类型归类（关系修复型/技巧学习型/产品咨询型/情感倾诉型）
 - **负面预警：识别投诉、退款、差评信号**
 - 标注评论爆发时间点
+- **私域特色**：评论用户是高粘性粉丝，评论内容真实反映核心用户需求；少有水军/恶意评论
 
-### 5. 直播节奏与流量效率分析
-- **时间维度的流量波动数据，标注流量高峰低谷时段**
-- **话术-数据涨跌交叉分析：哪个话术后流量涨/跌，哪个商品讲解后成交上升**
+### 5. 直播节奏与效率分析
+- **时间维度的数据波动，标注高峰低谷时段**
+- **话术-数据涨跌交叉分析：哪个话术后成交涨/跌，哪个商品讲解后成交上升**
 - 各环节时间占比：暖场/心理课/实操演示/产品推荐/互动 各占多少时间
-- **节奏问题诊断**：是否存在某个阶段过长导致流量下滑，或产品推荐时机不对
-- 人均产值(成交/场观)分析及与历史对比
+- **节奏问题诊断**：是否存在某个阶段过长导致用户流失，或产品推荐时机不对
+- 人均产值(成交/场观)分析及与历史对比——**私域人均产值通常远高于公域**
 - 改进建议
+- **私域特色**：不分析"流量推荐""推流"等公域概念，重点分析粉丝活跃时段、社群引流效率、私域运营动作（如群预告/朋友圈预热）对在线人数的影响
 
 ## 输出格式
 请严格按照以下格式输出，包含两部分：
@@ -769,8 +779,8 @@ function buildAnalysisDataMarkdown(
   const typeLabel = reportType === REPORT_TYPE.FINAL ? '终场综合' : `第${segmentSeq}片段(近30分钟)`;
 
   // For segment analysis: determine the time window
-  const lastSnap = snapshotData[snapshotData.length - 1];
-  const snapshotTimeVal = lastSnap?.snapshotTime ?? lastSnap?.snapshot_time;
+  const mdLastSnap = snapshotData[snapshotData.length - 1];
+  const snapshotTimeVal = mdLastSnap?.snapshotTime ?? mdLastSnap?.snapshot_time;
   const snapshotTime = snapshotTimeVal ? new Date(String(snapshotTimeVal)) : null;
 
   // For segment: window is last 30 min before snapshot_time
@@ -993,8 +1003,8 @@ function buildAnalysisPrompt(
   const typeLabel = reportType === REPORT_TYPE.FINAL ? '终场综合' : `第${segmentSeq}片段(近30分钟)`;
 
   // For segment analysis: determine the time window
-  const lastSnap = snapshotData[snapshotData.length - 1];
-  const snapshotTimeVal = lastSnap?.snapshotTime ?? lastSnap?.snapshot_time;
+  const promptSnap = snapshotData[snapshotData.length - 1];
+  const snapshotTimeVal = promptSnap?.snapshotTime ?? promptSnap?.snapshot_time;
   const snapshotTime = snapshotTimeVal ? new Date(String(snapshotTimeVal)) : null;
 
   // For segment: window is last 30 min before snapshot_time
@@ -1011,7 +1021,7 @@ function buildAnalysisPrompt(
   const dataMarkdown = buildAnalysisDataMarkdown(snapshotData, reportType, segmentSeq);
 
   // Build concise summary for the system prompt (reuse lastSnap from above)
-  const rawJson = (lastSnap?.rawJson ?? lastSnap?.raw_json) as Record<string, unknown> | null;
+  const rawJson = (promptSnap?.rawJson ?? promptSnap?.raw_json) as Record<string, unknown> | null;
   const analysis = (rawJson?.analysis as Record<string, unknown>) || {};
   const summaryLine = `在线${analysis.peakConcurrentViewers || 'N/A'} | 观看${analysis.watcherCnt || 'N/A'} | 评论${analysis.commentCnt || 'N/A'} | 成交¥${analysis.transactionAmount || 'N/A'}`;
 
@@ -1041,15 +1051,18 @@ ${dataMarkdown}
 3. 具体改进建议（可执行、有针对性）
 
 特别注意：
+- **这是私域直播**：没有算法推流、没有自然流量推荐，观众来自私域社群（微信群/朋友圈/粉丝群），不要用公域流量标准来评判
+- **这是私密产品直播**：两性健康/私护品类，决策链长、隐私性高，成交转化率天然低于快消品
 - **识别直播阶段结构**：开场暖场→情感痛点→心理理论→实操演示→产品植入→互动促单→收尾，标注每阶段的起止时间和数据变化
 - **话术策略识别**：痛点共情话术（"他是不是不主动了"）→ 心理解读（"男人追求征服感"）→ 技巧教学（"三步拿回主动权"）→ 产品衔接（"用这个效果更好"），分析每种话术对数据的拉动效果
 - **教学→产品衔接分析**：主播如何从心理课/实操课自然过渡到产品推荐，衔接是否流畅
 - 评论时间精确到分秒，定位互动爆发的具体时间点，关联对应话术
-- 关联话术与数据涨跌（哪个话术后流量/成交/互动明显变化）
+- 关联话术与数据涨跌（哪个话术后成交/互动明显变化）
 - 商品漏斗要分析每个环节的流失率并给出针对性建议
 - 评论舆情要用真实评论样本分析，不要泛泛而谈
 - **观众画像提取**：从评论中判断观众群体特征（年龄段、婚恋状况、核心痛点）
-- 流量高峰低谷要标注具体时间段
+- 数据波动要标注具体时间段
+- **新粉占比高是私域社群裂变效果好的正向信号，不是问题**
 - **对比历史脚本和成交基准，识别当前直播与过往的差异和改进点**
 - **基于历史成交数据，评估当前商品组合和话术的转化效果**
 ${previousSessionComparison ? `- **必须与前一场直播对比，标注【前场对比】**，指出进步和退步的地方` : ''}${benchmarkAnchorData ? `- **必须与核心基准主播（雅文老师）对比，标注【基准对比】**，指出差距和追赶建议` : ''}
@@ -1083,7 +1096,7 @@ async function callLLMAnalysis(prompt: string): Promise<string> {
   const messages = [
     {
       role: 'system' as const,
-      content: '你是一位专业的直播数据分析专家，擅长从多维度分析直播数据并给出可操作的改进建议。你熟悉"教学+带货"混合模式的直播场景，能够识别心理痛点话术→实操技巧演示→产品植入的转化路径，并精准关联话术与数据涨跌。',
+      content: '你是一位专业的**私域直播**数据分析专家，擅长从多维度分析私域直播数据并给出可操作的改进建议。核心认知：1)这是私域直播，没有算法推流和自然流量，观众来自私域社群；2)销售的是两性健康/私护类私密产品，转化路径长、决策谨慎；3)直播采用"教学+带货"混合模式（痛点共情→心理解读→实操演示→产品植入）；4)私域关键指标是粉丝粘性和复购率，不是流量规模；5)在线100-500人是私域正常范围，新粉占比高说明社群裂变效果好。你能精准识别话术策略与数据涨跌的关联。',
     },
     {
       role: 'user' as const,
@@ -1986,25 +1999,74 @@ async function _runAnalysisImpl(
   console.log(`[runAnalysis] Prompt 组装完成: 指令=${analysisPrompt.length}字符, 数据附件=${dataMarkdown.length}字符, 合计=${fullPrompt.length}字符`);
 
   // 调用 LLM 分析（内容审核拒绝时加强过滤后重试一次）
-  let analysisText: string;
-  try {
-    analysisText = await callLLMAnalysis(fullPrompt);
-  } catch (llmError: unknown) {
-    const errMsg = llmError instanceof Error ? llmError.message : String(llmError);
-    // 如果因内容审核失败，加强过滤后重试一次
-    if (errMsg.includes('DataInspectionFailed') || errMsg.includes('inappropriate content') || errMsg.includes('低俗') || errMsg.includes('色情')) {
-      console.log(`[runAnalysis] LLM内容审核拒绝，加强过滤后重试...`);
-      // 对 prompt 做一次更激进的过滤
-      const aggressiveFiltered = filterContent(fullPrompt, true);
-      try {
-        analysisText = await callLLMAnalysis(aggressiveFiltered.filtered);
-      } catch (retryError: unknown) {
-        console.error(`[runAnalysis] 加强过滤版仍被拒绝，放弃重试`);
-        throw retryError;
+  // 增加完整性检查：如果分析结果不完整（全0分/降级提示/维度为空），自动重试
+  const MAX_RETRIES = 3;
+  let analysisText = '';
+  let retryCount = 0;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    retryCount = attempt;
+    try {
+      analysisText = await callLLMAnalysis(fullPrompt);
+    } catch (llmError: unknown) {
+      const errMsg = llmError instanceof Error ? llmError.message : String(llmError);
+      // 如果因内容审核失败，加强过滤后重试一次
+      if (errMsg.includes('DataInspectionFailed') || errMsg.includes('inappropriate content') || errMsg.includes('低俗') || errMsg.includes('色情')) {
+        console.log(`[runAnalysis] LLM内容审核拒绝，加强过滤后重试(第${attempt}次)...`);
+        const aggressiveFiltered = filterContent(fullPrompt, true);
+        try {
+          analysisText = await callLLMAnalysis(aggressiveFiltered.filtered);
+        } catch (retryError: unknown) {
+          console.error(`[runAnalysis] 加强过滤版仍被拒绝`);
+          if (attempt < MAX_RETRIES) continue;
+          throw retryError;
+        }
+      } else {
+        if (attempt < MAX_RETRIES) {
+          console.warn(`[runAnalysis] LLM调用失败(第${attempt}次)，重试...`, errMsg);
+          continue;
+        }
+        throw llmError;
       }
-    } else {
-      throw llmError;
     }
+
+    // 完整性检查：分析结果是否有效
+    if (!analysisText || analysisText.trim().length < 100) {
+      console.warn(`[runAnalysis] 分析结果过短(${analysisText?.trim().length || 0}字符)，第${attempt}次重试...`);
+      if (attempt < MAX_RETRIES) continue;
+    }
+
+    // 检查是否为降级提示
+    if (analysisText.includes('分析失败') || analysisText.includes('分析服务暂时不可用')) {
+      console.warn(`[runAnalysis] 分析结果为降级提示，第${attempt}次重试...`);
+      if (attempt < MAX_RETRIES) continue;
+    }
+
+    // 检查五维内容是否提取得到
+    const testExtract = extractDimensions(extractJsonAndMarkdown(analysisText).markdown);
+    const nonEmptyDimensions = Object.values(testExtract).filter(d => d && d.trim().length > 20).length;
+    if (nonEmptyDimensions < 3) {
+      console.warn(`[runAnalysis] 分析维度不完整(仅${nonEmptyDimensions}/5有内容)，第${attempt}次重试...`);
+      if (attempt < MAX_RETRIES) continue;
+    }
+
+    // 检查JSON中的评分是否全为0
+    const testJson = extractJsonAndMarkdown(analysisText).json;
+    const testScores = testJson?.scores || {};
+    const allScoresZero = ['overall', 'anchor', 'interaction', 'conversion', 'sentiment', 'rhythm']
+      .every(k => !testScores[k] || Number(testScores[k]) === 0);
+    if (allScoresZero) {
+      console.warn(`[runAnalysis] 评分全为0或缺失，第${attempt}次重试...`);
+      if (attempt < MAX_RETRIES) continue;
+    }
+
+    // 通过所有检查，跳出重试循环
+    console.log(`[runAnalysis] 分析结果完整性检查通过(第${attempt}次尝试，维度=${nonEmptyDimensions}/5)`);
+    break;
+  }
+
+  if (retryCount >= MAX_RETRIES && (!analysisText || analysisText.trim().length < 100)) {
+    throw new Error(`AI分析${MAX_RETRIES}次重试后仍无有效结果`);
   }
 
   // 提取五维分析和 JSON
@@ -2233,8 +2295,8 @@ async function autoFillLiveScript(
   const conversionSection = safeAnalysisText.match(/###?\s*(?:商品转化|转化分析)[\s\S]*?(?=###?\s*(?:评论|直播|节奏|互动|主播|$))/i);
 
   // 从快照数据提取商品和成交信息
-  const lastSnap = snapshots[snapshots.length - 1];
-  const rawJson = (lastSnap?.rawJson ?? lastSnap?.raw_json) as Record<string, unknown> | null;
+  const profileLastSnap = snapshots[snapshots.length - 1];
+  const rawJson = (profileLastSnap?.rawJson ?? profileLastSnap?.raw_json) as Record<string, unknown> | null;
   const orderDetails = rawJson ? (rawJson.orderDetails as Record<string, unknown>[]) : [];
   const orderSummary = rawJson ? (rawJson.orderSummary as Record<string, unknown>) : {};
 
