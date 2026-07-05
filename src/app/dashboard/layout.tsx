@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 import { useMonitor } from '@/components/dashboard/monitor-provider';
 import { MonitorProvider } from '@/components/dashboard/monitor-provider';
 import {
-  BarChart3, Monitor, FileText, Settings, Activity, Radio, Pause, Play, Brain, Bell, CheckSquare, Users, Package, Clock, AlertTriangle
+  BarChart3, Monitor, FileText, Settings, Activity, Radio, Pause, Play, Brain, Bell, CheckSquare, Users, Package, Clock, AlertTriangle, Terminal
 } from 'lucide-react';
 
 const navigation = [
@@ -20,6 +20,7 @@ const navigation = [
   { name: '主播画像', href: '/dashboard/anchors', icon: Users },
   { name: '分析报告', href: '/dashboard/reports', icon: FileText },
   { name: '知识库', href: '/dashboard/knowledge', icon: Brain },
+  { name: '系统日志', href: '/dashboard/logs', icon: Terminal },
   { name: '系统设置', href: '/dashboard/settings', icon: Settings },
 ];
 
