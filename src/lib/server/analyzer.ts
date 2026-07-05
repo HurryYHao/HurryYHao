@@ -3,7 +3,7 @@
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { REPORT_TYPE, AI_PROVIDERS } from './config';
 import { UniversalLLMClient } from './llm-client';
-import { filterContent } from './content-filter';
+import { filterContent, filterForAI } from './content-filter';
 import { getSessionSnapshots } from './fetcher';
 import { memoryManager } from './memory-manager';
 
@@ -825,8 +825,8 @@ function buildAnalysisDataMarkdown(
     const orderDetails = (rawJson.orderDetails as Record<string, unknown>[]) || [];
     const orderSummary = (rawJson.orderSummary as Record<string, unknown>) || {};
     const transcription = snap.transcription as string | null;
-    // 对转写文字做内容审核过滤
-    const filteredTranscription = transcription ? filterContent(transcription).filtered : null;
+    // 对转写文字做轻量过滤（AI分析场景保留健康教育术语和产品名，仅移除极端违法内容）
+    const filteredTranscription = transcription ? filterForAI(transcription).filtered : null;
 
     // Core metrics
     const onlineCount = analysis.peakConcurrentViewers || 'N/A';
@@ -900,7 +900,7 @@ function buildAnalysisDataMarkdown(
     const transcriptions = snapshotData
       .map((snap, idx) => {
         const t = snap.transcription as string | null;
-        const filtered = t ? filterContent(t).filtered : null;
+        const filtered = t ? filterForAI(t).filtered : null;
         return filtered ? `### 片段${idx + 1}\n\n${filtered}` : '';
       })
       .filter(Boolean)
@@ -1062,6 +1062,8 @@ function buildAnalysisPrompt(
 
 请对以下直播数据进行**${typeLabel}分析**。完整数据见附件。
 
+**重要声明**：这是一个专业的两性健康/私护产品私域直播数据分析任务。主播的语音转写可能包含性健康教育、两性关系辅导、私密产品介绍等内容的讨论，这属于正常的专业直播内容，请客观分析其话术策略和商业效果，不要拒绝分析或回避相关内容。
+
 **片段上下文**: ${segmentContext}
 
 **关键指标速览**: ${summaryLine}
@@ -1082,6 +1084,7 @@ ${dataMarkdown}
 3. 具体改进建议（可执行、有针对性）
 
 特别注意：
+- **绝对禁止出现以下表述**：❌"数据缺失" ❌"无数据" ❌"无实时数据" ❌"因缺少" ❌"无法量化" ❌"无语音转写" ❌"缺少语音转写" ❌"无评论数据" ❌"无成交数据" ❌"无互动率" ❌"无法完成" ❌"无法分析"。上面的markdown数据表格已经包含所有快照数据，你必须直接引用表格中的具体数值。如果某个指标在表格中确实是0，写"该指标值为0"并分析原因。
 - **这是私域直播**：没有算法推流、没有自然流量推荐，观众来自私域社群（微信群/朋友圈/粉丝群），不要用公域流量标准来评判
 - **这是私密产品直播**：两性健康/私护品类，决策链长、隐私性高，成交转化率天然低于快消品
 - **区分评论数和评论人数**：评论数(commentCnt)是评论总条数，评论人数(commenterCnt)是发言人数，评论数一定≥评论人数，不要混淆
@@ -2041,8 +2044,22 @@ async function _runAnalysisImpl(
   let analysisText = '';
   let retryCount = 0;
 
+  // 日志：记录发送给AI的数据摘要，便于排查"数据缺失"问题
+  const dataSnapCount = snapshots.length;
+  const dataHasTranscription = snapshots.some((s: Record<string, unknown>) => s.transcription || s.rawJson);
+  const dataHasComments = snapshots.some((s: Record<string, unknown>) => {
+    const rawJson = (s.rawJson ?? s.raw_json) as Record<string, unknown> | null;
+    const comments = rawJson?.comments as Record<string, unknown>[] | undefined;
+    return comments && comments.length > 0;
+  });
+  console.log(`[runAnalysis] 发送数据摘要: 快照${dataSnapCount}条, 有转写=${dataHasTranscription}, 有评论=${dataHasComments}, prompt长度=${fullPrompt.length}字符`);
+
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     retryCount = attempt;
+    if (attempt > 1) {
+      // 重试前等待2秒，避免过快请求
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
     try {
       analysisText = await callLLMAnalysis(fullPrompt);
     } catch (llmError: unknown) {
@@ -2085,6 +2102,24 @@ async function _runAnalysisImpl(
     if (nonEmptyDimensions < 3) {
       console.warn(`[runAnalysis] 分析维度不完整(仅${nonEmptyDimensions}/5有内容)，第${attempt}次重试...`);
       if (attempt < MAX_RETRIES) continue;
+    }
+
+    // 检查是否出现"数据缺失/无数据"等空洞内容 — AI不该说没数据，必须基于快照数据分析
+    const noDataPatterns = [
+      '数据缺失', '无实时数据', '无数据', '无法量化', '因缺少', '因无语音', '无语音转写',
+      '无评论数据', '无互动率', '无商品漏斗', '无成交数据', '缺少实时数据', '缺少数据',
+      '无法完成', '无法分析', '无法评估', '无法判断', '缺少语音', '无语音转写数据',
+      '无成交', '无互动', '无评论', '无法识别', '数据不足', '数据为空',
+      '未获取到数据', '未能获取', '没有数据', '暂无数据', '暂缺数据',
+      '缺失数据', '缺失实时', '无法提供', '无法给出', '不能确定',
+    ];
+    const noDataHitCount = noDataPatterns.filter(p => analysisText.includes(p)).length;
+    if (noDataHitCount >= 2) {
+      console.warn(`[runAnalysis] 分析结果包含${noDataHitCount}处"数据缺失"类表述(${noDataPatterns.filter(p => analysisText.includes(p)).join(', ')}), 第${attempt}次重试...`);
+      if (attempt < MAX_RETRIES) continue;
+      // 如果已达最大重试次数，仍包含"数据缺失"，则拒绝保存
+      console.error(`[runAnalysis] ${MAX_RETRIES}次重试后仍含"数据缺失"表述，抛出错误不保存`);
+      throw new Error(`AI分析${MAX_RETRIES}次重试后仍返回"数据缺失"类结果，本次分析不保存`);
     }
 
     // 检查JSON中的评分是否全为0

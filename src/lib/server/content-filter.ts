@@ -436,6 +436,94 @@ export function hasSuspiciousContent(text: string): boolean {
 }
 
 /**
+ * AI分析专用轻量过滤
+ * 
+ * 与 filterContent 的区别：
+ * - filterContent 是面向用户展示/存储的严格过滤，会移除大量健康教育术语
+ * - filterForAI 保留所有健康教育术语、产品名称和教学用语，仅移除真正违法/极端的内容
+ * 
+ * 背景：私域直播销售两性健康产品，ASR转写包含大量性商课教学内容。
+ * 这些内容对AI分析是必要的（分析话术策略、产品衔接、观众需求等），
+ * 过度过滤会导致AI无法分析，产出"数据缺失"报告。
+ */
+const AI_ONLY_BLOCK_WORDS: string[] = [
+  // 仅保留真正违法/极端的内容
+  '强奸', '轮奸', '迷奸', '性侵', '猥亵',
+  '嫖娼', '卖淫', '妓女', '妓院', '援交', '出台',
+  '赌博', '赌场', '下注', '押注', '百家乐', '老虎机',
+  '吸毒', '毒品', '冰毒', '海洛因', '摇头丸',
+  '迷药', '听话水',
+  '砍死', '打死', '弄死', '杀掉', '灭口', '分尸', '碎尸',
+  // 极端粗口（保留一般口语，只去极端侮辱）
+  '操你', '草泥马', '马勒戈壁',
+];
+
+const AI_REGEX_PATTERNS: { pattern: RegExp; replacement: string }[] = [
+  // 仅匹配极端违法模式
+  { pattern: /\b(child|minor)\s*(sex|porn|abuse)\b/gi, replacement: '[已过滤]' },
+];
+
+export function filterForAI(text: string): FilterResult {
+  if (!text || text.trim().length === 0) {
+    return { filtered: text, wasFiltered: false, stats: { exactMatches: 0, regexMatches: 0, sentenceRemovals: 0, highRiskRemovals: 0 } };
+  }
+
+  let result = text;
+  let exactMatches = 0;
+  let regexMatches = 0;
+  let sentenceRemovals = 0;
+  let highRiskRemovals = 0;
+
+  // Step 1: 仅替换极端违法词汇
+  for (const word of AI_ONLY_BLOCK_WORDS) {
+    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(escaped, 'gi');
+    const before = result;
+    result = result.replace(regex, '[已过滤]');
+    if (before !== result) {
+      exactMatches++;
+    }
+  }
+
+  // Step 2: 仅匹配极端违法正则
+  for (const { pattern, replacement } of AI_REGEX_PATTERNS) {
+    const before = result;
+    result = result.replace(pattern, replacement);
+    if (before !== result) {
+      regexMatches++;
+    }
+  }
+
+  // Step 3: 移除包含违法词汇的整句（保护性措施）
+  const sentences = result.split(/(?<=[。！？\n；;])/);
+  const kept: string[] = [];
+  for (const sentence of sentences) {
+    if (sentence.includes('[已过滤]')) {
+      const cleaned = sentence.replace(/\[已过滤\]/g, '').trim();
+      if (cleaned.length < 3) {
+        highRiskRemovals++;
+        continue;
+      }
+    }
+    kept.push(sentence);
+  }
+  result = kept.join('');
+
+  // Step 4: 清理
+  result = result.replace(/(\[已过滤]\s*){2,}/g, '[已过滤]');
+  result = result.replace(/\n{3,}/g, '\n\n');
+  result = result.trim();
+
+  const wasFiltered = exactMatches > 0 || regexMatches > 0 || sentenceRemovals > 0 || highRiskRemovals > 0;
+
+  return {
+    filtered: result,
+    wasFiltered,
+    stats: { exactMatches, regexMatches, sentenceRemovals, highRiskRemovals },
+  };
+}
+
+/**
  * 过滤转写文本（用于 ASR 转写后、存储前）
  * 返回过滤后的文本
  */
