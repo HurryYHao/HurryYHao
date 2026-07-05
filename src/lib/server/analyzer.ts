@@ -865,9 +865,21 @@ function buildAnalysisDataMarkdown(
     sections.push(`| 人均产值(成交/场观) | ${Number(watcherCnt) > 0 && Number(transactionAmount) > 0 ? '¥' + (Number(transactionAmount) / Number(watcherCnt)).toFixed(2) : 'N/A'} |`);
     sections.push(`| 平均观看时长 | ${avgWatchTime}秒 |`);
 
-    // 主播语音转写 - 完整不截断
+    // 主播语音转写
     if (filteredTranscription) {
-      sections.push(`\n### 主播语音转写\n\n${filteredTranscription}\n`);
+      if (reportType === 'final') {
+        // 终场分析：截断转写，每个片段最多2000字，避免prompt超长
+        const MAX_FINAL_TRANSCRIPTION = 2000;
+        if (filteredTranscription.length > MAX_FINAL_TRANSCRIPTION) {
+          const truncated = filteredTranscription.slice(0, MAX_FINAL_TRANSCRIPTION);
+          sections.push(`\n### 主播语音转写（摘要，前${MAX_FINAL_TRANSCRIPTION}字）\n\n${truncated}\n\n...（转写过长已截断，完整转写见各片段分析）\n`);
+        } else {
+          sections.push(`\n### 主播语音转写\n\n${filteredTranscription}\n`);
+        }
+      } else {
+        // 片段分析：完整转写
+        sections.push(`\n### 主播语音转写\n\n${filteredTranscription}\n`);
+      }
     } else {
       sections.push(`\n### 主播语音转写\n\n暂无转写数据\n`);
     }
@@ -891,30 +903,100 @@ function buildAnalysisDataMarkdown(
     // 商品漏斗数据
     sections.push(`\n### 商品漏斗数据(点击→下单→支付)\n\n${buildGoodsFunnel(orderDetails)}\n`);
 
-    // 评论舆情数据 - 完整不截断
-    sections.push(`\n### 评论舆情数据\n\n${buildCommentsDataFull(comments, windowStart, windowEnd)}\n`);
-  }
-
-  // For final analysis, collect all transcriptions into a complete script
-  if (reportType === REPORT_TYPE.FINAL) {
-    const transcriptions = snapshotData
-      .map((snap, idx) => {
-        const t = snap.transcription as string | null;
-        const filtered = t ? filterForAI(t).filtered : null;
-        return filtered ? `### 片段${idx + 1}\n\n${filtered}` : '';
-      })
-      .filter(Boolean)
-      .join('\n\n');
-    if (transcriptions) {
-      sections.push(`\n## 整场直播完整脚本\n\n${transcriptions}\n`);
+    // 评论舆情数据
+    if (reportType === 'final') {
+      // 终场分析：只保留评论摘要（前50条 + 统计），避免prompt超长
+      sections.push(`\n### 评论舆情数据（摘要）\n\n${buildCommentsDataSummary(comments)}\n`);
+    } else {
+      sections.push(`\n### 评论舆情数据\n\n${buildCommentsDataFull(comments, windowStart, windowEnd)}\n`);
     }
   }
+
+  // For final analysis, add a condensed full-script summary
+  // (各片段转写已在上方摘要展示，此处不再重复完整脚本，避免prompt超长)
 
   return sections.join('\n');
 }
 
 /**
- * 构建完整评论数据（不截断，用于 md 文件）
+ * 构建评论摘要数据（终场分析用，避免prompt超长）
+ */
+function buildCommentsDataSummary(
+  comments: Record<string, unknown>[],
+): string {
+  if (!comments || comments.length === 0) return '暂无评论数据';
+
+  const positiveWords = ['好', '棒', '喜欢', '想要', '买了', '下单', '赞', '厉害', '牛', '漂亮', '心动', '好看', '爱', '帅', '美', '甜', '舒服', '推荐', '值', '可以', '实惠', '质量好', '正品', '靠谱'];
+  const negativeWords = ['差', '烂', '假', '骗', '退款', '投诉', '垃圾', '贵', '慢', '坏', '失望', '难用', '不好', '不满', '坑', '无语', '套路', '再也不', '被坑', '退货', '忽悠'];
+  const questionWords = ['吗', '呢', '？', '怎么', '什么', '哪', '多少', '如何', '为什么', '能不能', '可以吗'];
+
+  let positiveCnt = 0, negativeCnt = 0, questionCnt = 0;
+  let priceQ = 0, qualityQ = 0, shippingQ = 0, usageQ = 0;
+  const keywordMap = new Map<string, number>();
+
+  for (const c of comments) {
+    const content = String(c.content || '');
+    if (positiveWords.some(w => content.includes(w))) positiveCnt++;
+    if (negativeWords.some(w => content.includes(w))) negativeCnt++;
+    if (questionWords.some(w => content.includes(w))) questionCnt++;
+    if (/价格|多少钱|贵|便宜|优惠|打折/.test(content)) priceQ++;
+    if (/效果|质量|好用|正品|假/.test(content)) qualityQ++;
+    if (/发货|快递|物流|到货|包邮/.test(content)) shippingQ++;
+    if (/怎么用|使用|方法|步骤|教程/.test(content)) usageQ++;
+    for (let i = 0; i < content.length - 1; i++) {
+      const kw = content.substring(i, Math.min(i + 4, content.length));
+      if (kw.length >= 2 && /[\u4e00-\u9fff]/.test(kw)) {
+        keywordMap.set(kw, (keywordMap.get(kw) || 0) + 1);
+      }
+    }
+  }
+
+  const topKeywords = [...keywordMap.entries()]
+    .filter(([, cnt]) => cnt >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 30)
+    .map(([kw, cnt]) => `${kw}(${cnt})`)
+    .join(', ');
+
+  const negativeComments = comments.filter(c => negativeWords.some(w => String(c.content || '').includes(w)));
+
+  // 只保留前50条评论示例
+  const sampleComments = comments.slice(0, 50).map((c) => {
+    const ts = Number(c.timestamp || 0);
+    const timeStr = ts > 0 ? formatTimestamp(ts) : '--:--:--';
+    const userTag = c.isNewUser ? '[新]' : '[老]';
+    return `${timeStr} ${userTag}${c.nickname || '匿名'}: ${c.content}`;
+  }).join('\n');
+
+  return `
+【评论统计】
+- 总评论数: ${comments.length}
+- 正面情绪: ${positiveCnt}条 (${((positiveCnt / comments.length) * 100).toFixed(1)}%)
+- 负面情绪: ${negativeCnt}条 (${((negativeCnt / comments.length) * 100).toFixed(1)}%)
+- 提问类: ${questionCnt}条 (${((questionCnt / comments.length) * 100).toFixed(1)}%)
+
+【问题归类】
+- 价格相关: ${priceQ}条
+- 效果/质量相关: ${qualityQ}条
+- 物流相关: ${shippingQ}条
+- 使用方法相关: ${usageQ}条
+
+【高频关键词Top30】
+${topKeywords || '无'}
+
+${negativeComments.length > 0 ? `【负面预警】\n${negativeComments.slice(0, 10).map(c => {
+  const ts = Number(c.timestamp || 0);
+  const timeStr = ts > 0 ? formatTimestamp(ts) : '--:--:--';
+  return `⚠ ${timeStr} ${c.nickname || '匿名'}: ${c.content}`;
+}).join('\n')}` : '【负面预警】无明显负面信号'}
+
+【评论示例(前50条，共${comments.length}条)】
+${sampleComments}${comments.length > 50 ? '\n...（评论过长已截断）' : ''}
+`;
+}
+
+/**
+ * 构建完整评论数据（片段分析用，不截断）
  */
 function buildCommentsDataFull(
   comments: Record<string, unknown>[],
@@ -1047,7 +1129,7 @@ function buildAnalysisPrompt(
   }
 
   // Build analysis instruction (concise, without full data)
-  const dataMarkdown = buildAnalysisDataMarkdown(snapshotData, reportType, segmentSeq, sessionStartTime);
+  // Note: full dataMarkdown is appended separately in _runAnalysisImpl, do NOT include it here
 
   // Build concise summary for the system prompt (reuse lastSnap from above)
   const rawJson = (promptSnap?.rawJson ?? promptSnap?.raw_json) as Record<string, unknown> | null;
@@ -1070,11 +1152,6 @@ function buildAnalysisPrompt(
 
 ${historicalContext ? `${historicalContext}\n\n---\n\n` : ''}
 ${previousSessionComparison ? `${previousSessionComparison}\n---\n\n` : ''}${benchmarkAnchorData ? `${benchmarkAnchorData}\n---\n\n` : ''}
----
-
-## 附件：完整直播数据
-
-${dataMarkdown}
 
 ---
 
@@ -1118,9 +1195,9 @@ ${previousSessionComparison ? '- 与前一场对比时标注【前场对比】' 
  * 采用多模型并发调用策略：发送请求给多个模型，返回最先完成且成功的结果
  */
 async function callLLMAnalysis(prompt: string): Promise<string> {
-  // 256k 上下文模型支持约 640K chars，其他模型约 128K chars
-  // 使用 md 格式组织完整数据发送给 AI，不再截断
-  const MAX_PROMPT_LENGTH = 600000;
+  // 大部分模型上下文限制 128K tokens（约 130K 中文字符）
+  // 超长 prompt 会导致模型报错，需要合理截断
+  const MAX_PROMPT_LENGTH = 120000;
   let effectivePrompt = prompt;
   if (prompt.length > MAX_PROMPT_LENGTH) {
     console.warn(`[Analyzer] Prompt 过长 (${prompt.length} chars)，截断到 ${MAX_PROMPT_LENGTH}`);
@@ -2013,7 +2090,62 @@ async function _runAnalysisImpl(
 
   const sessionStartTime = sessionInfo?.startTime ?? sessionInfo?.start_time ?? null;
 
-  // 构建完整数据 Markdown（不截断，作为附件发送给 AI）
+  // 终场分析两步走：先提取话术大纲，再把大纲+数据发给AI分析
+  let scriptOutline = '';
+  if (reportType === REPORT_TYPE.FINAL) {
+    // 第一步：构建转写文本摘要（各片段转写拼接）
+    const transcriptionParts: string[] = [];
+    for (const snap of (analysisSnapshots.length > 0 ? analysisSnapshots : snapshots)) {
+      const rawJson = (snap.rawJson ?? snap.raw_json) as Record<string, unknown> | null;
+      let transcription = '';
+      if (rawJson?.transcription) {
+        transcription = filterForAI(String(rawJson.transcription)).filtered;
+      }
+      if (transcription.trim()) {
+        const seq = snap.snapshotSeq ?? snap.snapshot_seq ?? '?';
+        transcriptionParts.push(`【片段${seq}转写】\n${transcription}`);
+      }
+    }
+
+    if (transcriptionParts.length > 0) {
+      const fullTranscription = transcriptionParts.join('\n\n');
+      console.log(`[runAnalysis] 终场分析第一步：提取话术大纲，转写总长=${fullTranscription.length}字符`);
+
+      const outlinePrompt = `你是一个专业的私域直播分析师。请阅读以下整场直播的语音转写文字，提取出话术大纲。
+
+要求：
+1. 按时间顺序，归纳每个阶段的核心话题和话术要点
+2. 标注每个阶段对应的产品/商品
+3. 识别关键转化节点（从内容过渡到产品推荐的衔接点）
+4. 用简洁的条目式输出，不要写长篇分析
+
+输出格式：
+## 话术大纲
+### 阶段1：[阶段名称]（时间段）
+- 核心话题：xxx
+- 话术要点：xxx → xxx → xxx
+- 对应产品：xxx
+- 转化节点：xxx
+
+### 阶段2：...
+
+---
+
+${fullTranscription}`;
+
+      try {
+        scriptOutline = await callLLMAnalysis(outlinePrompt);
+        console.log(`[runAnalysis] 话术大纲提取完成: ${scriptOutline.length}字符`);
+      } catch (e) {
+        console.error(`[runAnalysis] 话术大纲提取失败，将跳过大纲:`, e instanceof Error ? e.message : e);
+        scriptOutline = '（话术大纲提取失败，请基于数据指标进行分析）';
+      }
+    } else {
+      scriptOutline = '（本场直播暂无转写数据）';
+    }
+  }
+
+  // 构建完整数据 Markdown
   const dataMarkdown = buildAnalysisDataMarkdown(
     analysisSnapshots.length > 0 ? analysisSnapshots : snapshots,
     reportType,
@@ -2033,10 +2165,16 @@ async function _runAnalysisImpl(
     sessionStartTime
   );
 
-  // 合并为完整 prompt：指令 + 完整数据附件
-  const fullPrompt = `${analysisPrompt}\n\n---\n\n# 直播数据附件\n\n${dataMarkdown}`;
+  // 合并为完整 prompt
+  let fullPrompt: string;
+  if (reportType === REPORT_TYPE.FINAL && scriptOutline) {
+    // 终场分析：用话术大纲替代完整转写，大幅缩短prompt
+    fullPrompt = `${analysisPrompt}\n\n---\n\n# 话术大纲（AI从完整转写中提取）\n\n${scriptOutline}\n\n---\n\n# 直播数据附件\n\n${dataMarkdown}`;
+  } else {
+    fullPrompt = `${analysisPrompt}\n\n---\n\n# 直播数据附件\n\n${dataMarkdown}`;
+  }
 
-  console.log(`[runAnalysis] Prompt 组装完成: 指令=${analysisPrompt.length}字符, 数据附件=${dataMarkdown.length}字符, 合计=${fullPrompt.length}字符`);
+  console.log(`[runAnalysis] Prompt 组装完成: 指令=${analysisPrompt.length}字符, 数据附件=${dataMarkdown.length}字符, 大纲=${scriptOutline.length}字符, 合计=${fullPrompt.length}字符`);
 
   // 调用 LLM 分析（内容审核拒绝时加强过滤后重试一次）
   // 增加完整性检查：如果分析结果不完整（全0分/降级提示/维度为空），自动重试
@@ -2467,6 +2605,8 @@ export async function* streamAnalysis(
     ]);
   }
 
+  const sessionStartTime = sessionInfo?.startTime ?? sessionInfo?.start_time ?? null;
+
   const prompt = buildAnalysisPrompt(
     skill.content,
     analysisSnapshots.length > 0 ? analysisSnapshots : snapshots,
@@ -2474,8 +2614,19 @@ export async function* streamAnalysis(
     segmentSeq,
     historicalContext,
     previousSessionComparison,
-    benchmarkAnchorData
+    benchmarkAnchorData,
+    sessionStartTime
   );
+
+  // 构建数据附件（buildAnalysisPrompt 不再包含完整数据）
+  const dataMarkdown = buildAnalysisDataMarkdown(
+    analysisSnapshots.length > 0 ? analysisSnapshots : snapshots,
+    reportType,
+    segmentSeq,
+    sessionStartTime
+  );
+
+  const fullPrompt = `${prompt}\n\n---\n\n# 直播数据附件\n\n${dataMarkdown}`;
 
   const llmClient = new UniversalLLMClient();
   await llmClient.initFromDb();
@@ -2485,7 +2636,7 @@ export async function* streamAnalysis(
       role: 'system' as const,
       content: '你是一位专业的直播数据分析专家，擅长从多维度分析直播数据并给出可操作的改进建议。',
     },
-    { role: 'user' as const, content: prompt },
+    { role: 'user' as const, content: fullPrompt },
   ];
 
   let fullText = '';

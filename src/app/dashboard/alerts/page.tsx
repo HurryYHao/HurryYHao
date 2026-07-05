@@ -261,7 +261,7 @@ export default function AlertsPage() {
                             <Clock className="w-3.5 h-3.5" />
                             {formatLiveTime(alert)}
                           </span>
-                          {alert.triggeredAt && (
+                          {alert.triggeredAt && !isNaN(new Date(alert.triggeredAt).getTime()) && (
                             <span className="text-xs">
                               ({format(new Date(alert.triggeredAt), 'MM-dd HH:mm:ss', { locale: zhCN })})
                             </span>

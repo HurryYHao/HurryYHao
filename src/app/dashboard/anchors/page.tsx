@@ -110,7 +110,7 @@ export default function AnchorsPage() {
                     <div>
                       <CardTitle className="text-xl">{profile.anchorName}</CardTitle>
                       <CardDescription className="mt-1">
-                        最后更新: {format(new Date(profile.updated_at), 'yyyy-MM-dd HH:mm', { locale: zhCN })}
+                        最后更新: {profile.updated_at ? format(new Date(profile.updated_at), 'yyyy-MM-dd HH:mm', { locale: zhCN }) : '暂无'}
                       </CardDescription>
                     </div>
                   </div>
