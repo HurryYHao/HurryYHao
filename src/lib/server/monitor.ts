@@ -230,6 +230,7 @@ export async function getNumberAnalysis(): Promise<{
 export async function pollLiveStatus(): Promise<{
   newLiveRooms: string[];
   endedRooms: string[];
+  rooms: LiveRoom[];
 }> {
   const client = getSupabaseClient();
   const newLiveRooms: string[] = [];
@@ -273,7 +274,7 @@ export async function pollLiveStatus(): Promise<{
     }
   }
 
-  return { newLiveRooms, endedRooms };
+  return { newLiveRooms, endedRooms, rooms };
 }
 
 /**

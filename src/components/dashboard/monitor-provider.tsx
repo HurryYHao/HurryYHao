@@ -98,6 +98,17 @@ export function MonitorProvider({ children }: { children: React.ReactNode }) {
         }
         addLog('info', logMsg);
         
+        // 检测自动开播/下播
+        const pollResult = json.data.pollResult;
+        if (pollResult?.newLiveRooms?.length > 0) {
+          addLog('info', `[自动检测] 新开播房间: ${pollResult.newLiveRooms.join(', ')}`);
+          toast.success(`检测到新开播，已自动创建录制会话`);
+        }
+        if (pollResult?.endedRooms?.length > 0) {
+          addLog('info', `[自动检测] 已下播房间: ${pollResult.endedRooms.join(', ')}`);
+          toast.info(`检测到直播结束，已执行终场分析`);
+        }
+        
         // 检测自动分析触发
         const triggered = json.data.autoAnalysisTriggered || [];
         if (triggered.length > 0) {

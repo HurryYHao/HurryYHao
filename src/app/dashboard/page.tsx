@@ -143,6 +143,8 @@ export default function DashboardPage() {
 
   const summary = data?.liveSummary;
   const recordingStatus = data?.recordingStatus || [];
+  // 筛选出直播中的房间
+  const liveRooms = (data?.rooms || []).filter(r => r.liveStatus === 'STARTING');
 
   if (loading) {
     return (
@@ -175,6 +177,100 @@ export default function DashboardPage() {
           刷新
         </Button>
       </div>
+
+      {/* ===== 直播中 ===== */}
+      {liveRooms.length > 0 && (
+        <Card className="border-red-500/20">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-2">
+                <span className="relative flex h-5 w-5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-5 w-5 bg-red-500 items-center justify-center">
+                    <Radio className="h-3 w-3 text-white" />
+                  </span>
+                </span>
+                直播监控中
+                <Badge variant="destructive" className="text-[10px] px-1.5 ml-1">
+                  {liveRooms.length}场
+                </Badge>
+              </CardTitle>
+              <Badge variant="outline" className="border-primary/30 text-primary">
+                实时数据
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {liveRooms.map(room => {
+                const isRecording = recordingStatus.some(r => r.roomId === room.roomId);
+                return (
+                  <div key={room.roomId} className="flex items-center gap-4 p-3 rounded-lg border border-red-500/10 bg-red-500/5 hover:bg-red-500/10 transition-colors">
+                    {/* 封面缩略图 */}
+                    {room.coverUrl ? (
+                      <div className="relative w-16 h-16 rounded-md overflow-hidden flex-shrink-0">
+                        <img src={room.coverUrl} alt={room.roomName} className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                          <span className="relative flex h-2.5 w-2.5">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="relative w-16 h-16 rounded-md bg-muted flex items-center justify-center flex-shrink-0">
+                        <Radio className="h-6 w-6 text-red-500" />
+                      </div>
+                    )}
+                    {/* 房间信息 */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium text-sm truncate">{room.roomName}</p>
+                        {isRecording && (
+                          <Badge className="text-[10px] bg-red-500/20 text-red-600 border-red-500/30">
+                            <CircleDot className="h-3 w-3 mr-0.5" />录制中
+                          </Badge>
+                        )}
+                        {room.roomType === 'intelligence' && (
+                          <Badge variant="secondary" className="text-[10px]">智能</Badge>
+                        )}
+                      </div>
+                      {/* 实时数据条 */}
+                      {room.liveData ? (
+                        <div className="flex items-center gap-4 mt-1.5 text-xs">
+                          <span className="flex items-center gap-1 text-primary font-mono">
+                            <Users className="h-3 w-3" />{formatNum(room.liveData.onlineCount)}在线
+                          </span>
+                          <span className="flex items-center gap-1 font-mono">
+                            <Eye className="h-3 w-3 text-muted-foreground" />{formatNum(room.liveData.totalWatchCount)}观看
+                          </span>
+                          <span className="flex items-center gap-1 font-mono">
+                            <MessageSquare className="h-3 w-3 text-muted-foreground" />{formatNum(room.liveData.commentCount)}评论
+                          </span>
+                          {room.liveData.orderTotalAmount > 0 && (
+                            <span className="flex items-center gap-1 font-mono text-emerald-600">
+                              ¥{formatMoney(room.liveData.orderTotalAmount)}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground mt-1">数据获取中...</p>
+                      )}
+                    </div>
+                    {/* 操作按钮 */}
+                    <Link href={`/dashboard/live?roomId=${room.roomId}`}>
+                      <Button variant="outline" size="sm" className="h-7 text-xs">
+                        <BarChart3 className="h-3 w-3 mr-1" />
+                        数据大盘
+                      </Button>
+                    </Link>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* ===== 录制中的直播 ===== */}
       {recordingStatus.length > 0 && (

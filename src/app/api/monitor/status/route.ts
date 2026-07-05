@@ -8,6 +8,20 @@ import { getLiveSpaceId } from '@/lib/server/auth';
 
 export async function GET(request: NextRequest) {
   try {
+    // ===== 0. 自动检测开播/下播（核心：创建/结束会话） =====
+    let pollResult = { newLiveRooms: [] as string[], endedRooms: [] as string[], rooms: [] as LiveRoom[] };
+    try {
+      pollResult = await pollLiveStatus();
+      if (pollResult.newLiveRooms.length > 0) {
+        console.log(`[MonitorStatus] 自动检测到新开播: ${pollResult.newLiveRooms.join(', ')}`);
+      }
+      if (pollResult.endedRooms.length > 0) {
+        console.log(`[MonitorStatus] 自动检测到下播: ${pollResult.endedRooms.join(', ')}`);
+      }
+    } catch (err) {
+      console.error('[MonitorStatus] 自动开播检测失败:', err instanceof Error ? err.message : err);
+    }
+
     // ===== 1. 获取平台统计 =====
     let numberAnalysis = { total: 0, inStart: 0, notStart: 0 };
     try {
@@ -16,14 +30,10 @@ export async function GET(request: NextRequest) {
       // Token 可能未初始化
     }
 
-    // ===== 2. 获取直播列表 =====
-    let rooms: LiveRoom[] = [];
-    try {
-      const result = await getLiveList(1, 50);
-      rooms = result.rooms;
-    } catch {
-      // ignore
-    }
+    // ===== 2. 获取直播列表（复用 pollLiveStatus 的结果，避免重复 API 调用） =====
+    let rooms: LiveRoom[] = pollResult.rooms.length > 0
+      ? pollResult.rooms
+      : await getLiveList(1, 50).then(r => r.rooms).catch(() => [] as LiveRoom[]);
 
     // ===== 3. 获取数据库中的活跃会话 =====
     const client = getSupabaseClient();
@@ -142,7 +152,18 @@ export async function GET(request: NextRequest) {
       console.error('[MonitorStatus] 获取录制状态异常:', err instanceof Error ? err.message : err);
     }
 
-    // ===== 6. 1分钟实时预警检查（非阻塞） =====
+    // ===== 6. 自动30分钟片段分析检查（非阻塞） =====
+    let autoAnalysisTriggered: Array<{ sessionId: number; roomId: string; segmentSeq: number }> = [];
+    try {
+      autoAnalysisTriggered = await checkAndRunScheduledAnalysis();
+      if (autoAnalysisTriggered.length > 0) {
+        console.log(`[MonitorStatus] 自动分析触发:`, autoAnalysisTriggered);
+      }
+    } catch (err) {
+      console.error('[MonitorStatus] 自动分析检查异常:', err instanceof Error ? err.message : err);
+    }
+
+    // ===== 7. 1分钟实时预警检查（非阻塞） =====
     let realtimeAlertResults: Array<{ sessionId: number; alertCount: number }> = [];
     try {
       realtimeAlertResults = await checkAndRunRealtimeAlerts();
@@ -175,8 +196,9 @@ export async function GET(request: NextRequest) {
         recentSessions: recentSessions || [],
         liveSummary,
         recordingStatus,
-        autoAnalysisTriggered: [],
+        autoAnalysisTriggered,
         realtimeAlertResults,
+        pollResult,
       },
     });
   } catch (err) {
