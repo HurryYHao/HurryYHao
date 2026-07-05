@@ -3,6 +3,7 @@
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { REPORT_TYPE, AI_PROVIDERS } from './config';
 import { UniversalLLMClient } from './llm-client';
+import { filterContent } from './content-filter';
 import { getSessionSnapshots } from './fetcher';
 import { memoryManager } from './memory-manager';
 
@@ -797,6 +798,8 @@ function buildAnalysisPrompt(
     const orderDetails = (rawJson.orderDetails as Record<string, unknown>[]) || [];
     const orderSummary = (rawJson.orderSummary as Record<string, unknown>) || {};
     const transcription = snap.transcription as string | null;
+    // 对转写文字做内容审核过滤（双保险，防止数据库中已有的未过滤内容）
+    const filteredTranscription = transcription ? filterContent(transcription).filtered : null;
 
     // Core metrics from analysis
     const onlineCount = analysis.peakConcurrentViewers || 'N/A';
@@ -836,7 +839,7 @@ function buildAnalysisPrompt(
 人均产值(成交/场观): ${Number(watcherCnt) > 0 && Number(transactionAmount) > 0 ? '¥' + (Number(transactionAmount) / Number(watcherCnt)).toFixed(2) : 'N/A'}
 平均观看时长: ${avgWatchTime}秒
 
-${transcription ? `【主播语音转写】\n${transcription}\n` : '【主播语音转写】暂无转写数据'}
+${filteredTranscription ? `【主播语音转写】\n${filteredTranscription}\n` : '【主播语音转写】暂无转写数据'}
 
 ${buildNewoldData(newoldData)}
 
@@ -857,7 +860,9 @@ ${buildCommentsData(comments, windowStart, windowEnd)}
     const transcriptions = snapshotData
       .map((snap, idx) => {
         const t = snap.transcription as string | null;
-        return t ? `[片段${idx + 1}] ${t}` : '';
+        // 对转写文字做内容审核过滤
+        const filtered = t ? filterContent(t).filtered : null;
+        return filtered ? `[片段${idx + 1}] ${filtered}` : '';
       })
       .filter(Boolean)
       .join('\n\n');

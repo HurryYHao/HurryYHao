@@ -6,6 +6,7 @@
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import fs from 'fs';
 import { asrClient } from './asr-client';
+import { filterTranscription } from './content-filter';
 
 /**
  * 执行音频转写
@@ -44,9 +45,12 @@ export async function transcribeAudio(audioPath: string, sessionId: number, segm
   }
 
   // 使用我们的 ASR 客户端
-  const text = await asrClient.transcribe(audioPath);
+  const rawText = await asrClient.transcribe(audioPath);
 
-  console.log(`[TranscribeWorker] ASR 转写成功: ${text.length} 字符`);
+  console.log(`[TranscribeWorker] ASR 转写成功: ${rawText.length} 字符`);
+
+  // 内容审核过滤：去除色情/违规词，避免AI分析时被拒绝
+  const text = filterTranscription(rawText);
 
   // 保存到数据库
   // 更新 snapshot_data 转写结果
