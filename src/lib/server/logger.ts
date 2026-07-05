@@ -1,22 +1,39 @@
 /**
  * 服务端日志工具 - 同时输出到 console 和日志文件
  * 
- * 日志文件路径: /app/work/logs/bypass/app.log
+ * 日志目录优先级:
+ * 1. /app/work/logs/bypass (开发环境)
+ * 2. /tmp/live-analysis-logs (生产环境回退)
  * 格式: JSON (与 coze pino logger 格式一致)
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 
-const LOG_DIR = '/app/work/logs/bypass';
-const LOG_FILE = path.join(LOG_DIR, 'app.log');
-
-// 确保日志目录存在
-try {
-  fs.mkdirSync(LOG_DIR, { recursive: true });
-} catch {
-  // 目录已存在或无法创建，忽略
+// 动态确定日志目录：优先用 /app，不可写则回退到 /tmp
+function resolveLogDir(): string {
+  const preferredDir = '/app/work/logs/bypass';
+  try {
+    fs.mkdirSync(preferredDir, { recursive: true });
+    // 测试是否可写
+    const testFile = path.join(preferredDir, '.write_test');
+    fs.writeFileSync(testFile, 'test');
+    fs.unlinkSync(testFile);
+    return preferredDir;
+  } catch {
+    // /app 不可写，回退到 /tmp
+    const fallbackDir = '/tmp/live-analysis-logs';
+    try {
+      fs.mkdirSync(fallbackDir, { recursive: true });
+      return fallbackDir;
+    } catch {
+      return '/tmp';
+    }
+  }
 }
+
+const LOG_DIR = resolveLogDir();
+const LOG_FILE = path.join(LOG_DIR, 'app.log');
 
 type LogLevel = 'error' | 'warn' | 'info' | 'debug';
 
@@ -76,3 +93,8 @@ export const logger = {
     writeToFile('debug', msg);
   },
 };
+
+/** 获取当前日志目录路径（供其他模块使用） */
+export function getLogDir(): string {
+  return LOG_DIR;
+}
