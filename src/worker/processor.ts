@@ -134,6 +134,7 @@ export class WorkerProcessor {
   }
 
   private async executeJob(job: any) {
+    const JOB_TIMEOUT_MS = 20 * 60 * 1000; // 20分钟超时
     try {
       const payload = job.payload || {};
       let result = null;
@@ -144,47 +145,58 @@ export class WorkerProcessor {
       const sessionId = job.sessionId || job.session_id;
       const segmentSeq = job.segmentSeq || job.segment_seq;
 
-      switch (jobType) {
-        case 'monitor':
-          const { pollLiveStatus } = await import('@/lib/server/monitor');
-          await pollLiveStatus();
-          break;
-          
-        case 'record':
-          const { autoStartRecording } = await import('@/lib/server/recorder');
-          await autoStartRecording(payload.roomId, sessionId, payload.roomName);
-          break;
-          
-        case 'transcribe':
-          const { transcribeAudio } = await import('@/lib/server/transcribe-worker');
-          await transcribeAudio(payload.audioUrl, sessionId, segmentSeq);
-          break;
-          
-        case 'analysis':
-        case 'final_analysis':
-          const { runAnalysis } = await import('@/lib/server/analyzer');
-          const isFinal = jobType === 'final_analysis' || payload.isFinal;
-          result = await runAnalysis(sessionId, payload.roomId, segmentSeq, isFinal ? 'final' : 'segment');
-          if (isFinal) {
-            const { runKnowledgeQualityControl } = await import('@/lib/server/knowledge-quality');
-            await runKnowledgeQualityControl();
-          }
-          break;
-          
-        case 'knowledge_quality':
-          const { runKnowledgeQualityControl: runKQ } = await import('@/lib/server/knowledge-quality');
-          await runKQ();
-          result = { message: 'Knowledge quality control completed' };
-          break;
-          
-        case 'snapshot':
-          const { fetchAllSnapshotData } = await import('@/lib/server/fetcher');
-          result = await fetchAllSnapshotData(sessionId, payload.roomId, segmentSeq);
-          break;
+      // 超时保护：防止任务卡死
+      const jobPromise = (async () => {
+        switch (jobType) {
+          case 'monitor':
+            const { pollLiveStatus } = await import('@/lib/server/monitor');
+            await pollLiveStatus();
+            break;
+            
+          case 'record':
+            const { autoStartRecording } = await import('@/lib/server/recorder');
+            await autoStartRecording(payload.roomId, sessionId, payload.roomName);
+            break;
+            
+          case 'transcribe':
+            const { transcribeAudio } = await import('@/lib/server/transcribe-worker');
+            await transcribeAudio(payload.audioUrl, sessionId, segmentSeq);
+            break;
+            
+          case 'analysis':
+          case 'final_analysis':
+            const { runAnalysis } = await import('@/lib/server/analyzer');
+            const isFinal = jobType === 'final_analysis' || payload.isFinal;
+            result = await runAnalysis(sessionId, payload.roomId, segmentSeq, isFinal ? 'final' : 'segment');
+            if (isFinal) {
+              const { runKnowledgeQualityControl } = await import('@/lib/server/knowledge-quality');
+              await runKnowledgeQualityControl();
+            }
+            break;
+            
+          case 'knowledge_quality':
+            const { runKnowledgeQualityControl: runKQ } = await import('@/lib/server/knowledge-quality');
+            await runKQ();
+            result = { message: 'Knowledge quality control completed' };
+            break;
+            
+          case 'snapshot':
+            const { fetchAllSnapshotData } = await import('@/lib/server/fetcher');
+            result = await fetchAllSnapshotData(sessionId, payload.roomId, segmentSeq);
+            break;
 
-        default:
-          throw new Error(`Unknown job type: ${jobType}`);
-      }
+          default:
+            throw new Error(`Unknown job type: ${jobType}`);
+        }
+        return result;
+      })();
+
+      result = await Promise.race([
+        jobPromise,
+        new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error(`Job ${job.id} timed out after ${JOB_TIMEOUT_MS / 60000} minutes`)), JOB_TIMEOUT_MS)
+        ),
+      ]);
 
       // 任务成功完成
       await globalQueue.complete(job.id, result);

@@ -39,10 +39,33 @@ interface FindPageResult {
   };
 }
 
-/** 正在运行的分析任务（防止重复触发） */
+/** 正在运行的分析任务（防止重复触发）+ 超时自动清理 */
 const runningAnalyses = new Set<number>();
+const runningAnalysisStart = new Map<number, number>(); // sessionId -> startTime
+const ANALYSIS_TIMEOUT_MS = 30 * 60 * 1000; // 30分钟超时
+
+// 定期清理超时的分析任务（防止内存泄漏）
+setInterval(() => {
+  const now = Date.now();
+  for (const [sessionId, startTime] of runningAnalysisStart) {
+    if (now - startTime > ANALYSIS_TIMEOUT_MS) {
+      console.warn(`[Monitor] 分析任务超时自动清理: session=${sessionId}, 耗时=${Math.round((now - startTime) / 60000)}分钟`);
+      runningAnalyses.delete(sessionId);
+      runningAnalysisStart.delete(sessionId);
+    }
+  }
+}, 5 * 60 * 1000); // 每5分钟检查一次
+
 // 内存锁：防止并发请求为同一房间重复创建会话
 const sessionCreationLocks = new Set<string>();
+
+/** 清理已结束会话的内存缓存（防止内存泄漏） */
+function cleanupMemoryForSession(sessionId: number, roomId: string) {
+  runningAnalyses.delete(sessionId);
+  runningAnalysisStart.delete(sessionId);
+  sessionCreationLocks.delete(roomId);
+  lastRealtimeCheck.delete(sessionId);
+}
 // 防抖：避免频繁调用 pollLiveStatus
 
 /**
@@ -412,6 +435,8 @@ async function endSession(sessionId: number, roomId: string): Promise<void> {
   }
   // 重置重试计数，防止后续误判
   resetRetryCount(roomId);
+  // 清理该会话的内存缓存（防止内存泄漏）
+  cleanupMemoryForSession(sessionId, roomId);
 
   // 转写最后一段录制的音频（等待完成后再分析）
   const lastSegmentSeq = Number(getField(session, 'lastSnapshotSeq', 'last_snapshot_seq')) || 0;
@@ -902,6 +927,7 @@ export async function checkAndRunScheduledAnalysis(): Promise<Array<{
     if (elapsed >= intervalMs) {
       // 标记为正在运行，防止重复触发
       runningAnalyses.add(sessionId);
+      runningAnalysisStart.set(sessionId, Date.now());
 
       const nextSeq = sLastSnapshotSeq + 1;
 
@@ -917,6 +943,7 @@ export async function checkAndRunScheduledAnalysis(): Promise<Array<{
         })
         .finally(() => {
           runningAnalyses.delete(sessionId);
+          runningAnalysisStart.delete(sessionId);
         });
 
       triggered.push({ sessionId, roomId: sRoomId, segmentSeq: nextSeq });
@@ -1199,10 +1226,14 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
 
         const { UniversalLLMClient } = await import('./llm-client');
         const llm = new UniversalLLMClient();
-        const aiResult = await llm.invoke(
-          [{ role: 'user', content: aiPrompt }],
-          { model: 'doubao-seed-2-0-lite-260215', temperature: 0.3 }
-        );
+        // 实时预警AI调用添加30秒超时，防止卡住
+        const aiResult = await Promise.race([
+          llm.invoke(
+            [{ role: 'user', content: aiPrompt }],
+            { model: 'doubao-seed-2-0-lite-260215', temperature: 0.3 }
+          ),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 30000)),
+        ]);
 
         if (aiResult) {
           const jsonMatch = aiResult.match(/\{[\s\S]*\}/);

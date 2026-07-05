@@ -1557,48 +1557,59 @@ async function saveKnowledgeItems(items: KnowledgeItem[]): Promise<number> {
   let saved = 0;
 
   for (const item of items) {
-    // 检查是否已存在相同知识
-    const { data: existing } = await client
-      .from('analysis_knowledge')
-      .select('id, confidence, sample_count, value, source')
-      .eq('category', item.category)
-      .eq('dimension', item.dimension)
-      .eq('key', item.key)
-      .maybeSingle();
-
-    if (existing) {
-      // 已存在：更新置信度和样本数
-      const newConfidence = Math.min(5, existing.confidence + 1);
-      const newSampleCount = existing.sample_count + 1;
-
-      // 如果值差异大，降低置信度（说明知识不稳定）
-      const valueChanged = existing.value !== item.value;
-      const adjustedConfidence = valueChanged ? Math.max(1, existing.confidence - 1) : newConfidence;
-
-      await client
+    try {
+      // 检查是否已存在相同知识
+      const { data: existing } = await client
         .from('analysis_knowledge')
-        .update({
-          value: valueChanged ? `${existing.value} | ${item.value}` : item.value,
-          confidence: adjustedConfidence,
-          sample_count: newSampleCount,
+        .select('id, confidence, sample_count, value, source')
+        .eq('category', item.category)
+        .eq('dimension', item.dimension)
+        .eq('key', item.key)
+        .maybeSingle();
+
+      if (existing) {
+        // 已存在：更新置信度和样本数（安全处理 null/NaN）
+        const existingConfidence = Number(existing.confidence ?? 1) || 1;
+        const existingSampleCount = Number(existing.sampleCount ?? 0) || 0;
+        const existingValue = String(existing.value ?? '');
+        const existingSource = String(existing.source ?? '');
+        const existingId = Number(existing.id);
+
+        const newConfidence = Math.min(5, existingConfidence + 1);
+        const newSampleCount = existingSampleCount + 1;
+
+        // 如果值差异大，降低置信度（说明知识不稳定）
+        const valueChanged = existingValue !== item.value;
+        const adjustedConfidence = valueChanged ? Math.max(1, existingConfidence - 1) : newConfidence;
+
+        await client
+          .from('analysis_knowledge')
+          .update({
+            value: valueChanged ? `${existingValue} | ${item.value}` : item.value,
+            confidence: adjustedConfidence,
+            sample_count: newSampleCount,
+            last_validated_at: new Date().toISOString(),
+            source: `${existingSource}, ${item.source}`,
+          })
+          .eq('id', existingId);
+      } else {
+        // 不存在：插入新知识
+        await client.from('analysis_knowledge').insert({
+          category: item.category,
+          dimension: item.dimension,
+          key: item.key,
+          value: item.value,
+          source: item.source,
+          confidence: 1,
+          sample_count: 1,
           last_validated_at: new Date().toISOString(),
-          source: `${existing.source}, ${item.source}`,
-        })
-        .eq('id', existing.id);
-    } else {
-      // 不存在：插入新知识
-      await client.from('analysis_knowledge').insert({
-        category: item.category,
-        dimension: item.dimension,
-        key: item.key,
-        value: item.value,
-        source: item.source,
-        confidence: 1,
-        sample_count: 1,
-        last_validated_at: new Date().toISOString(),
-      });
+        });
+      }
+      saved++;
+    } catch (itemErr) {
+      // 单条保存失败不影响其他条目
+      console.error(`[Knowledge] 保存知识失败(key=${item.key}):`, itemErr instanceof Error ? itemErr.message : String(itemErr));
     }
-    saved++;
   }
 
   return saved;
