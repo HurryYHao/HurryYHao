@@ -10,7 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-const IS_PROD = process.env.COZE_PROJECT_ENV === 'PROD';
+const IS_PROD = (process.env.COZE_PROJECT_ENV === 'PROD') || (process.env.NODE_ENV === 'production');
 
 function resolveLogDir(): string {
   // 生产环境直接用 /tmp，避免任何 /app 权限问题
@@ -24,23 +24,27 @@ function resolveLogDir(): string {
     }
   }
   
-  // 开发环境尝试 /app
-  const preferredDir = '/app/work/logs/bypass';
-  try {
-    fs.mkdirSync(preferredDir, { recursive: true });
-    const testFile = path.join(preferredDir, '.write_test');
-    fs.writeFileSync(testFile, 'test');
-    fs.unlinkSync(testFile);
-    return preferredDir;
-  } catch {
-    // /app 不可写，回退到 /tmp
-    const fallbackDir = '/tmp/live-analysis-logs';
+  // 开发环境尝试 /app（仅当 /app/work/logs 已存在时可写）
+  if (fs.existsSync('/app/work/logs')) {
+    const preferredDir = '/app/work/logs/bypass';
     try {
-      fs.mkdirSync(fallbackDir, { recursive: true });
-      return fallbackDir;
+      fs.mkdirSync(preferredDir, { recursive: true });
+      const testFile = path.join(preferredDir, '.write_test');
+      fs.writeFileSync(testFile, 'test');
+      fs.unlinkSync(testFile);
+      return preferredDir;
     } catch {
-      return '/tmp';
+      // fall through
     }
+  }
+  
+  // 回退到 /tmp
+  const fallbackDir = '/tmp/live-analysis-logs';
+  try {
+    fs.mkdirSync(fallbackDir, { recursive: true });
+    return fallbackDir;
+  } catch {
+    return '/tmp';
   }
 }
 

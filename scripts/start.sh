@@ -1,26 +1,21 @@
 #!/bin/bash
-set -Eeuo pipefail
 
 COZE_WORKSPACE_PATH="${COZE_WORKSPACE_PATH:-$(pwd)}"
+DEPLOY_RUN_PORT="${DEPLOY_RUN_PORT:-5000}"
 
-PORT=5000
-DEPLOY_RUN_PORT="${DEPLOY_RUN_PORT:-$PORT}"
+cd "${COZE_WORKSPACE_PATH}"
 
-start_service() {
-    cd "${COZE_WORKSPACE_PATH}"
-    
-    # 日志目录：生产环境直接用 /tmp，开发环境用 /app/work/logs/bypass
-    if [ "${COZE_PROJECT_ENV}" = "PROD" ] 2>/dev/null; then
-        LOG_DIR="/tmp/live-analysis-logs"
-    elif [ -w "/app/work/logs" ] 2>/dev/null; then
-        LOG_DIR="/app/work/logs/bypass"
-    else
-        LOG_DIR="/tmp/live-analysis-logs"
-    fi
-    mkdir -p "${LOG_DIR}" 2>/dev/null || true
-    
-    PORT=${DEPLOY_RUN_PORT} node dist/server.js 2>&1 | tee -a "${LOG_DIR}/app.log"
-}
+# 日志目录：生产环境直接用 /tmp，避免任何 /app 权限问题
+if [ "${COZE_PROJECT_ENV}" = "PROD" ]; then
+    LOG_DIR="/tmp/live-analysis-logs"
+elif [ -d "/app/work/logs" ] && [ -w "/app/work/logs" ]; then
+    LOG_DIR="/app/work/logs/bypass"
+else
+    LOG_DIR="/tmp/live-analysis-logs"
+fi
+mkdir -p "${LOG_DIR}" 2>/dev/null || true
 
 echo "Starting HTTP service on port ${DEPLOY_RUN_PORT} for deploy..."
-start_service
+echo "Log dir: ${LOG_DIR}"
+
+PORT=${DEPLOY_RUN_PORT} node dist/server.js 2>&1 | tee -a "${LOG_DIR}/app.log"
