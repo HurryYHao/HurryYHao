@@ -353,9 +353,10 @@ async function upsertMinuteMetrics(
   }
 }
 
+// 时间轴事件功能已移除（live_timeline_events 表已删除）
 async function upsertTimelineEvent(
-  sessionId: number,
-  event: {
+  _sessionId: number,
+  _event: {
     timestamp: string;
     offset_seconds: number;
     event_type: string;
@@ -365,32 +366,7 @@ async function upsertTimelineEvent(
     importance: 'low' | 'medium' | 'high';
   }
 ): Promise<void> {
-  const client = getSupabaseClient();
-  const existing = await client
-    .from('live_timeline_events')
-    .select('id')
-    .eq('session_id', sessionId)
-    .eq('timestamp', event.timestamp)
-    .eq('event_type', event.event_type)
-    .eq('source', event.source)
-    .maybeSingle();
-
-  const payload = {
-    session_id: sessionId,
-    timestamp: event.timestamp,
-    offset_seconds: event.offset_seconds,
-    event_type: event.event_type,
-    content: event.content,
-    metrics: event.metrics || null,
-    source: event.source,
-    importance: event.importance,
-  };
-
-  if (existing.data?.id) {
-    await client.from('live_timeline_events').update(payload).eq('id', existing.data.id);
-  } else {
-    await client.from('live_timeline_events').insert(payload);
-  }
+  // live_timeline_events 表已删除
 }
 
 async function generateTimelineFromSnapshot(

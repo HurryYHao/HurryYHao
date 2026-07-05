@@ -917,11 +917,20 @@ async function callLLMAnalysis(prompt: string): Promise<string> {
   console.log(prompt);
   console.log('='.repeat(100));
 
-  // 定义模型调用策略：使用 coze-coding-dev-sdk 支持的模型
+  // 定义模型调用策略：使用 coze-coding-dev-sdk 支持的所有模型，并发调用，谁先返回用谁
   const modelsToTry = [
     { model: 'doubao-seed-2-0-pro-260215', name: 'Doubao Pro' },
     { model: 'doubao-seed-2-0-lite-260215', name: 'Doubao Lite' },
-    { model: 'doubao-seed-1-8-251228', name: 'Doubao 1.8' }
+    { model: 'doubao-seed-2-0-mini-260215', name: 'Doubao Mini' },
+    { model: 'doubao-seed-1-8-251228', name: 'Doubao 1.8' },
+    { model: 'deepseek-v3-2-251201', name: 'DeepSeek V3' },
+    { model: 'kimi-k2-5-260127', name: 'Kimi K2' },
+    { model: 'glm-5-0-260211', name: 'GLM 5' },
+    { model: 'glm-5-turbo-260316', name: 'GLM 5 Turbo' },
+    { model: 'glm-4-7-251222', name: 'GLM 4' },
+    { model: 'minimax-m2-5-260212', name: 'MiniMax M2.5' },
+    { model: 'minimax-m2-7-260318', name: 'MiniMax M2.7' },
+    { model: 'qwen-3-5-plus-260215', name: 'Qwen 3.5 Plus' },
   ];
 
   console.log(`[Analyzer] 启动多模型并发分析, 参与模型: ${modelsToTry.map(m => m.name).join(', ')}`);
@@ -1121,90 +1130,28 @@ async function saveAlerts(sessionId: number, alerts: Array<{ type: string; sever
   console.info(`[Alerts] 保存 ${alerts.length} 条预警 (session=${sessionId})`);
 }
 
-/** 保存行动项到action_items表 */
+/** 保存行动项 - 已弃用（action_items 表已删除） */
 async function saveActionItems(
-  sessionId: number,
-  reportId: number | undefined,
-  anchorName: string | null,
+  _sessionId: number,
+  _reportId: number | undefined,
+  _anchorName: string | null,
   items: Array<{ dimension: string; title: string; description: string; priority: string }>,
-  sourceQuote: string
+  _sourceQuote: string
 ) {
-  if (items.length === 0) return;
-  const client = getSupabaseClient();
-  const rows = items.map((item) => ({
-    session_id: sessionId,
-    report_id: reportId,
-    anchor_name: anchorName,
-    dimension: item.dimension,
-    title: item.title,
-    description: item.description,
-    priority: item.priority,
-    source_quote: sourceQuote.substring(0, 1000),
-  }));
-  const { error } = await client.from('action_items').insert(rows);
-  if (error) {
-    console.error('[ActionItems] 保存失败:', error.message);
-  } else {
-    console.info(`[ActionItems] 保存 ${items.length} 条建议 (session=${sessionId})`);
+  // action_items 表已删除，行动项保留在 analysis_reports.action_items JSON 字段中
+  if (items.length > 0) {
+    console.info(`[ActionItems] ${items.length} 条建议已包含在报告中（独立表已移除）`);
   }
 }
 
+// 时间轴事件功能已移除（live_timeline_events 表已删除）
 async function saveAnalysisTimelineEvents(
-  sessionId: number,
-  alerts: Array<{ type: string; severity: string; title: string; description: string }>,
-  highlights: Array<{ dimension: string; title: string; metric?: string }>,
-  reportType: 'segment' | 'final'
+  _sessionId: number,
+  _alerts: Array<{ type: string; severity: string; title: string; description: string }>,
+  _highlights: Array<{ dimension: string; title: string; metric?: string }>,
+  _reportType: 'segment' | 'final'
 ) {
-  const client = getSupabaseClient();
-  const now = new Date().toISOString();
-
-  const events = [
-    ...alerts.map((alert) => ({
-      session_id: sessionId,
-      timestamp: now,
-      event_type: 'alert_triggered',
-      content: `${alert.title}: ${alert.description}`,
-      metrics: { severity: alert.severity, type: alert.type },
-      source: 'ai',
-      importance: alert.severity === 'high' ? 'high' : 'medium',
-    })),
-    ...highlights.map((highlight) => ({
-      session_id: sessionId,
-      timestamp: now,
-      event_type: 'analysis_highlight',
-      content: highlight.title,
-      metrics: { dimension: highlight.dimension, metric: highlight.metric || null },
-      source: 'ai',
-      importance: 'medium',
-    })),
-    {
-      session_id: sessionId,
-      timestamp: now,
-      event_type: reportType === 'final' ? 'final_analysis_completed' : 'segment_analysis_completed',
-      content: reportType === 'final' ? '终场分析完成' : '片段分析完成',
-      metrics: { report_type: reportType },
-      source: 'ai',
-      importance: 'medium',
-    },
-  ];
-
-  for (const event of events) {
-    const existing = await client
-      .from('live_timeline_events')
-      .select('id')
-      .eq('session_id', sessionId)
-      .eq('event_type', event.event_type)
-      .eq('content', event.content)
-      .eq('source', event.source)
-      .maybeSingle();
-
-    if (!existing.data?.id) {
-      await client.from('live_timeline_events').insert({
-        ...event,
-        offset_seconds: null,
-      });
-    }
-  }
+  // live_timeline_events 表已删除，不再写入时间轴事件
 }
 
 export async function upsertAnchorProfile(anchorName: string): Promise<void> {

@@ -72,7 +72,6 @@ const TABLE_NAME_MAP: Record<string, string> = {
   liveSessions: 'live_sessions',
   snapshotData: 'snapshot_data',
   analysisReports: 'analysis_reports',
-  liveTimelineEvents: 'live_timeline_events',
   liveMetricsMinute: 'live_metrics_minute',
   liveAlerts: 'live_alerts',
   analysisKnowledge: 'analysis_knowledge',

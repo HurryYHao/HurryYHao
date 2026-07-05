@@ -163,28 +163,6 @@ export const recordingSegments = pgTable(
   ]
 );
 
-// 行动项
-export const actionItems = pgTable(
-  "action_items",
-  {
-    id: serial().primaryKey(),
-    session_id: integer("session_id").notNull().references(() => liveSessions.id),
-    report_id: integer("report_id").references(() => analysisReports.id),
-    anchor_name: varchar("anchor_name", { length: 100 }),
-    dimension: varchar("dimension", { length: 50 }),
-    title: varchar("title", { length: 500 }).notNull(),
-    description: text("description"),
-    priority: varchar("priority", { length: 20 }).default("medium"),
-    source_quote: text("source_quote"),
-    status: varchar("status", { length: 20 }).default("pending"),
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => [
-    index("action_items_session_idx").on(table.session_id),
-  ]
-);
-
 // 知识库
 export const analysisKnowledge = pgTable(
   "analysis_knowledge",
@@ -288,28 +266,6 @@ export const liveGoodsMetrics = pgTable(
   (table) => [
     index("live_goods_metrics_session_idx").on(table.session_id),
     index("live_goods_metrics_goods_idx").on(table.session_id, table.goods_id),
-  ]
-);
-
-// 时间轴事件
-export const liveTimelineEvents = pgTable(
-  "live_timeline_events",
-  {
-    id: serial().primaryKey(),
-    session_id: integer("session_id").notNull().references(() => liveSessions.id),
-    timestamp: timestamp("timestamp", { withTimezone: true }),
-    offset_seconds: integer("offset_seconds").default(0),
-    event_type: varchar("event_type", { length: 50 }).notNull(),
-    content: text("content"),
-    metrics: jsonb("metrics"),
-    source: varchar("source", { length: 50 }).default("system"),
-    importance: varchar("importance", { length: 20 }).default("medium"),
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => [
-    index("live_timeline_events_session_idx").on(table.session_id),
-    index("live_timeline_events_type_idx").on(table.event_type),
   ]
 );
 

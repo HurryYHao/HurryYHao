@@ -58,8 +58,22 @@ export class ASRClient {
       console.log(`[ASR] 正在调用腾讯云 ASR 转录音频: ${filePath}`);
 
       // 读取音频文件
-      const audioBuffer = fs.readFileSync(filePath);
-      const base64Audio = audioBuffer.toString('base64');
+      let audioBuffer = fs.readFileSync(filePath);
+      let base64Audio = audioBuffer.toString('base64');
+      const BASE64_LIMIT = 5242880; // 腾讯云 Data 字段 base64 上限 5MB
+
+      // 如果 base64 后超限，先用 ffmpeg 压缩
+      if (base64Audio.length > BASE64_LIMIT) {
+        console.log(`[ASR] 音频 base64 长度 ${base64Audio.length} 超过限制 ${BASE64_LIMIT}，开始压缩...`);
+        const compressedPath = await this.compressAudio(filePath);
+        audioBuffer = fs.readFileSync(compressedPath);
+        base64Audio = audioBuffer.toString('base64');
+        console.log(`[ASR] 压缩后 base64 长度: ${base64Audio.length}`);
+
+        // 清理临时压缩文件
+        try { fs.unlinkSync(compressedPath); } catch {}
+      }
+
       const dataLen = audioBuffer.length;
 
       console.log(`[ASR] 音频文件读取成功: size=${dataLen} bytes, base64 length=${base64Audio.length}`);
@@ -97,6 +111,42 @@ export class ASRClient {
       console.error('[ASR] 转录失败:', error);
       throw error;
     }
+  }
+
+  /**
+   * 压缩音频文件以适应 ASR 接口大小限制
+   * 逐步降低码率直到 base64 后不超过 5MB
+   */
+  private async compressAudio(filePath: string): Promise<string> {
+    const { execSync } = require('child_process') as typeof import('child_process');
+    const os = require('os');
+    const BASE64_LIMIT = 5242880;
+    // 从低到高尝试不同码率（越低文件越小）
+    const bitrates = ['16k', '12k', '8k'];
+
+    for (const bitrate of bitrates) {
+      const outputPath = path.join(os.tmpdir(), `asr_compressed_${Date.now()}.mp3`);
+      try {
+        execSync(
+          `ffmpeg -i "${filePath}" -vn -ac 1 -ar 16000 -b:a ${bitrate} -y "${outputPath}"`,
+          { stdio: 'pipe', timeout: 30000 }
+        );
+        const compressed = fs.readFileSync(outputPath);
+        const b64len = Math.ceil(compressed.length * 4 / 3);
+        console.log(`[ASR] 压缩尝试 bitrate=${bitrate}: base64~${b64len}, 文件=${compressed.length} bytes`);
+        if (b64len <= BASE64_LIMIT) {
+          console.log(`[ASR] 压缩成功: bitrate=${bitrate}, base64~${b64len}`);
+          return outputPath;
+        }
+        // 仍然超限，清理后尝试更低码率
+        try { fs.unlinkSync(outputPath); } catch {}
+      } catch (err) {
+        console.warn(`[ASR] 压缩失败 bitrate=${bitrate}:`, err instanceof Error ? err.message : err);
+        try { fs.unlinkSync(outputPath); } catch {}
+      }
+    }
+
+    throw new Error('音频文件过大，压缩后仍超过 ASR 接口限制（5MB base64）');
   }
 
   /**
