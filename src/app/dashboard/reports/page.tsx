@@ -66,6 +66,7 @@ export default function ReportsPage() {
   const [batchMode, setBatchMode] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [reanalyzing, setReanalyzing] = useState<number | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
   const fetchReports = async (sessionId: number) => {
@@ -250,6 +251,58 @@ export default function ReportsPage() {
     }
   };
 
+  // Reanalyze single report
+  const handleReanalyze = async (report: Report) => {
+    setReanalyzing(report.id);
+    try {
+      const res = await fetch('/api/reports/reanalyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportId: report.id }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        toast.success('重新分析完成');
+        if (selectedSession) fetchReports(selectedSession.id);
+        // Close detail dialog if viewing this report
+        if (selectedReport?.id === report.id) setSelectedReport(null);
+      } else {
+        toast.error(json.error || json.message || '重新分析失败');
+      }
+    } catch {
+      toast.error('重新分析失败');
+    } finally {
+      setReanalyzing(null);
+    }
+  };
+
+  // Batch reanalyze
+  const handleBatchReanalyze = async () => {
+    if (selectedIds.size === 0) { toast.error('请先选择报告'); return; }
+    setReanalyzing(-1); // use -1 as batch indicator
+    try {
+      const res = await fetch('/api/reports/reanalyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportIds: Array.from(selectedIds) }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        toast.success(json.message || '批量重新分析完成');
+        setSelectedIds(new Set());
+        setBatchMode(false);
+        if (selectedSession) fetchReports(selectedSession.id);
+        setSelectedReport(null);
+      } else {
+        toast.error(json.message || json.error || '批量重新分析失败');
+      }
+    } catch {
+      toast.error('批量重新分析失败');
+    } finally {
+      setReanalyzing(null);
+    }
+  };
+
   // Batch delete
   const handleBatchDelete = async () => {
     if (selectedIds.size === 0) { toast.error('请先选择报告'); return; }
@@ -424,6 +477,10 @@ export default function ReportsPage() {
                           {exporting ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Download className="h-3 w-3 mr-1" />}
                           导出({selectedIds.size})
                         </Button>
+                        <Button variant="outline" size="sm" onClick={handleBatchReanalyze} disabled={reanalyzing !== null || selectedIds.size === 0} className="text-xs h-7">
+                          {reanalyzing === -1 ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                          重分析({selectedIds.size})
+                        </Button>
                         <Button variant="destructive" size="sm" onClick={handleBatchDelete} disabled={deleting || selectedIds.size === 0} className="text-xs h-7">
                           {deleting ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Trash2 className="h-3 w-3 mr-1" />}
                           删除({selectedIds.size})
@@ -498,6 +555,17 @@ export default function ReportsPage() {
                             {/* Single report actions */}
                             {!batchMode && (
                               <div className="flex items-center gap-1 ml-2">
+                                <Button
+                                  variant="ghost" size="sm" className="h-6 w-6 p-0"
+                                  disabled={reanalyzing === report.id}
+                                  onClick={e => { e.stopPropagation(); handleReanalyze(report); }}
+                                  title="重新分析"
+                                >
+                                  {reanalyzing === report.id
+                                    ? <Loader2 className="h-3 w-3 animate-spin" />
+                                    : <RefreshCw className="h-3 w-3" />
+                                  }
+                                </Button>
                                 <Button
                                   variant="ghost" size="sm" className="h-6 w-6 p-0"
                                   onClick={e => { e.stopPropagation(); handleExportSingle(report); }}
@@ -591,6 +659,17 @@ export default function ReportsPage() {
               <div className="ml-auto flex items-center gap-1">
                 {selectedReport && (
                   <>
+                    <Button
+                      variant="outline" size="sm"
+                      disabled={reanalyzing === selectedReport.id}
+                      onClick={() => handleReanalyze(selectedReport)}
+                      className="text-xs h-7"
+                    >
+                      {reanalyzing === selectedReport.id
+                        ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />分析中...</>
+                        : <><RefreshCw className="h-3 w-3 mr-1" />重新分析</>
+                      }
+                    </Button>
                     <Button variant="outline" size="sm" onClick={() => handleExportSingle(selectedReport)} className="text-xs h-7">
                       <Download className="h-3 w-3 mr-1" />导出DOCX
                     </Button>
