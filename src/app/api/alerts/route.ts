@@ -26,7 +26,7 @@ export async function GET(request: Request) {
     }
 
     // 获取相关session信息
-    const sessionIds = [...new Set((alerts || []).map((a: any) => a.session_id))];
+    const sessionIds = [...new Set((alerts || []).map((a: any) => a.sessionId))];
     const sessionMap: Record<number, any> = {};
 
     if (sessionIds.length > 0) {
@@ -42,19 +42,19 @@ export async function GET(request: Request) {
 
     // 计算每条预警相对于直播开始时间的偏移
     const enrichedData = (alerts || []).map((alert: any) => {
-      const session = sessionMap[alert.session_id];
+      const session = sessionMap[alert.sessionId];
       let offsetMinutes: number | null = null;
-      if (session?.start_time && alert.triggered_at) {
-        const start = new Date(session.start_time).getTime();
-        const triggered = new Date(alert.triggered_at).getTime();
+      if (session?.startTime && alert.triggeredAt) {
+        const start = new Date(session.startTime).getTime();
+        const triggered = new Date(alert.triggeredAt).getTime();
         offsetMinutes = Math.max(0, Math.round((triggered - start) / 60000));
       }
       return {
         ...alert,
         session: session ? {
-          room_name: session.room_name,
-          anchor_name: session.anchor_name,
-          start_time: session.start_time,
+          room_name: session.roomName,
+          anchor_name: session.anchorName,
+          start_time: session.startTime,
         } : null,
         offset_minutes: offsetMinutes,
       };

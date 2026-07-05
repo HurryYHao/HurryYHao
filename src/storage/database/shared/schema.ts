@@ -51,6 +51,8 @@ export const snapshotData = pgTable(
     new_fan_pay_count: integer("new_fan_pay_count").default(0),
     old_fan_pay_count: integer("old_fan_pay_count").default(0),
     raw_json: jsonb("raw_json"),
+    transcription: text("transcription"),
+    recording_url: varchar("recording_url", { length: 500 }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -134,6 +136,30 @@ export const liveAlerts = pgTable(
     index("live_alerts_session_idx").on(table.session_id),
     index("live_alerts_severity_idx").on(table.severity),
     index("live_alerts_status_idx").on(table.status),
+  ]
+);
+
+// 录制片段
+export const recordingSegments = pgTable(
+  "recording_segments",
+  {
+    id: serial().primaryKey(),
+    session_id: integer("session_id").notNull().references(() => liveSessions.id),
+    room_id: varchar("room_id", { length: 100 }),
+    segment_seq: integer("segment_seq").notNull().default(0),
+    start_time: timestamp("start_time", { withTimezone: true }),
+    end_time: timestamp("end_time", { withTimezone: true }),
+    duration_seconds: integer("duration_seconds").default(0),
+    local_path: varchar("local_path", { length: 500 }),
+    file_size: integer("file_size").default(0),
+    status: varchar("status", { length: 20 }).default("pending"),
+    transcribe_status: varchar("transcribe_status", { length: 20 }).default("pending"),
+    error_message: text("error_message"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("recording_segments_session_idx").on(table.session_id),
   ]
 );
 
@@ -284,29 +310,6 @@ export const liveTimelineEvents = pgTable(
   (table) => [
     index("live_timeline_events_session_idx").on(table.session_id),
     index("live_timeline_events_type_idx").on(table.event_type),
-  ]
-);
-
-// 录制片段
-export const recordingSegments = pgTable(
-  "recording_segments",
-  {
-    id: serial().primaryKey(),
-    session_id: integer("session_id").notNull().references(() => liveSessions.id),
-    room_id: varchar("room_id", { length: 100 }),
-    segment_seq: integer("segment_seq").notNull().default(0),
-    start_time: timestamp("start_time", { withTimezone: true }),
-    end_time: timestamp("end_time", { withTimezone: true }),
-    duration_seconds: integer("duration_seconds").default(0),
-    local_path: varchar("local_path", { length: 500 }),
-    file_size: integer("file_size").default(0),
-    status: varchar("status", { length: 20 }).default("pending"),
-    transcribe_status: varchar("transcribe_status", { length: 20 }).default("pending"),
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => [
-    index("recording_segments_session_idx").on(table.session_id),
   ]
 );
 

@@ -107,7 +107,7 @@ export class JobQueue {
         let retryQuery = client.from('background_jobs')
           .select('*')
           .eq('status', 'failed')
-          .lt('retry_count', 'max_retry') // Supabase 语法不支持比较两列，这里只是演示
+          // DbQueryBuilder 不支持列间比较，改用本地过滤（下方 line 121）
           .order('updated_at', { ascending: true })
           .limit(5);
           

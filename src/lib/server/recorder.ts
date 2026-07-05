@@ -600,17 +600,34 @@ export async function getSegments(roomId: string, roomName?: string): Promise<Ar
       ))
       .sort();
 
-    // 获取数据库中的转写状态
+    // 获取数据库中的转写状态（通过 session_id 关联）
     const client = getSupabaseClient();
-    const { data: recordingSegments } = await client
-      .from('recording_segments')
-      .select('segment_seq, transcribe_status')
-      .eq('room_id', roomId);
 
-    const { data: snapshotData } = await client
-      .from('snapshot_data')
-      .select('snapshot_seq, transcription')
-      .eq('room_id', roomId);
+    // 先查找 session_id
+    let sessionId: number | null = null;
+    const { data: sessionData } = await client
+      .from('live_sessions')
+      .select('id')
+      .eq('room_id', roomId)
+      .limit(1);
+    
+    if (sessionData && sessionData.length > 0) {
+      sessionId = (sessionData[0] as any).id;
+    }
+
+    const { data: recordingSegments } = sessionId
+      ? await client
+          .from('recording_segments')
+          .select('segment_seq, transcribe_status')
+          .eq('session_id', sessionId)
+      : { data: [] };
+
+    const { data: snapshotDataRows } = sessionId
+      ? await client
+          .from('snapshot_data')
+          .select('snapshot_seq, transcription')
+          .eq('session_id', sessionId)
+      : { data: [] };
 
     // 构建映射
     const transcribeStatusMap = new Map<number, string>();
@@ -624,10 +641,10 @@ export async function getSegments(roomId: string, roomName?: string): Promise<Ar
       }
     }
     
-    if (snapshotData) {
-      for (const snap of snapshotData) {
-        if (snap.snapshot_seq && snap.transcription) {
-          transcriptionMap.set(snap.snapshot_seq, snap.transcription);
+    if (snapshotDataRows) {
+      for (const snap of snapshotDataRows) {
+        if ((snap as any).snapshot_seq && (snap as any).transcription) {
+          transcriptionMap.set((snap as any).snapshot_seq, (snap as any).transcription);
         }
       }
     }

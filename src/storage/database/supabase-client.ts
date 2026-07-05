@@ -4,7 +4,8 @@
  * 所有数据存储到 PostgreSQL 数据库，不再使用本地 storage.json
  * 提供 Supabase 兼容 API: db.from('table').select().eq().order()
  */
-import { getPool } from 'coze-coding-dev-sdk';
+import { getPool, getDbUrl } from 'coze-coding-dev-sdk';
+import pg from 'pg';
 import type { Pool, QueryResult, QueryResultRow } from 'pg';
 
 let _pool: Pool | null = null;
@@ -19,12 +20,21 @@ export async function getDbPool(): Promise<Pool> {
 
   _poolInit = (async () => {
     try {
-      const pool = await Promise.resolve(getPool());
+      // 直接用 dbUrl 创建 pg.Pool，避免 SDK getPool() 的 prepared statement 缓存问题
+      const dbUrl = await getDbUrl();
+      const pool = new pg.Pool({ connectionString: dbUrl, ssl: false });
       _pool = pool as Pool;
-      console.log('[DB] Pool initialized from coze-coding-dev-sdk');
+      console.log('[DB] Pool initialized from dbUrl');
     } catch (e) {
-      console.error('[DB] Failed to get pool from SDK:', e);
-      throw e;
+      console.error('[DB] Failed to get pool from dbUrl:', e);
+      try {
+        const pool = await Promise.resolve(getPool());
+        _pool = pool as Pool;
+        console.log('[DB] Pool initialized from coze-coding-dev-sdk fallback');
+      } catch (e2) {
+        console.error('[DB] Failed to get pool from SDK:', e2);
+        throw e2;
+      }
     }
     _poolInit = null;
     return _pool!;
@@ -272,19 +282,13 @@ class DbQueryBuilder {
   }
 
   limit(count: number): this {
-    const paramIdx = this._whereParams.length + 1;
-    this._limitClause = `LIMIT $${paramIdx}`;
-    this._whereParams.push(count);
+    this._limitClause = `LIMIT ${Number(count)}`;
     return this;
   }
 
   range(from: number, to: number): this {
-    const paramIdx1 = this._whereParams.length + 1;
-    const paramIdx2 = this._whereParams.length + 2;
-    this._limitClause = `LIMIT $${paramIdx1}`;
-    this._offsetClause = `OFFSET $${paramIdx2}`;
-    this._whereParams.push(to - from + 1);
-    this._whereParams.push(from);
+    const limit = to - from + 1;
+    this._limitClause = `LIMIT ${limit} OFFSET ${from}`;
     return this;
   }
 
@@ -385,7 +389,9 @@ class DbQueryBuilder {
 
     if (this._singleMode === 'single') {
       if (data.length === 0) {
-        return { data: null, error: new Error('No rows found') };
+        const err = new Error('No rows found') as Error & { code: string };
+        err.code = 'PGRST116';
+        return { data: null, error: err };
       }
       return { data: data[0] as unknown as Record<string, unknown>[], error: null };
     }
