@@ -1294,7 +1294,6 @@ async function callLLMAnalysis(prompt: string): Promise<string> {
  */
 function extractDimensions(analysisText: string): FiveDimensionResult {
   const safeText = analysisText || '';
-  const sections = safeText.split(/###\s*/);
   const result: FiveDimensionResult = {
     anchor_analysis: '',
     interaction_analysis: '',
@@ -1303,31 +1302,56 @@ function extractDimensions(analysisText: string): FiveDimensionResult {
     rhythm_analysis: '',
   };
 
+  // 维度映射：按 ## 或 ### 标题行匹配
+  // 数据库字段含义: anchor=话术/主播, interaction=互动/粘性, conversion=转化/成交, sentiment=舆情/观众, rhythm=节奏
+  // 支持 AI 输出 ## 和 ### 两种标题级别
   const dimensionKeywords: Record<keyof FiveDimensionResult, string[]> = {
-    anchor_analysis: ['主播话术', '话术分析', '主播'],
-    interaction_analysis: ['互动热度', '互动分析', '互动'],
-    conversion_analysis: ['商品转化', '转化分析', '转化'],
-    sentiment_analysis: ['评论舆情', '舆情分析', '舆情'],
-    rhythm_analysis: ['直播节奏', '节奏分析', '节奏'],
+    anchor_analysis: ['话术', '主播话术', '主播能力', '话术策略', '话术分析', '主播'],
+    interaction_analysis: ['互动', '粉丝粘性', '互动热度', '互动分析', '信任度', '粘性'],
+    conversion_analysis: ['转化', '商品转化', '转化分析', '成交', '销售'],
+    sentiment_analysis: ['评论', '舆情', '观众画像', '观众需求', '评论舆情'],
+    rhythm_analysis: ['节奏', '直播节奏', '节奏分析', '内容效率', '流量效率'],
   };
 
-  for (const section of sections) {
-    if (!section.trim()) continue;
+  // 优先级顺序：越靠前优先匹配越高，避免"商品转化与销售节奏"中的"节奏"被误匹配到rhythm
+  const dimensionOrder: (keyof FiveDimensionResult)[] = [
+    'anchor_analysis',      // 话术/主播
+    'conversion_analysis',  // 转化/成交 (必须在rhythm之前，因为标题可能包含"节奏")
+    'interaction_analysis', // 互动/粘性
+    'sentiment_analysis',   // 评论/舆情/观众
+    'rhythm_analysis',      // 节奏
+  ];
 
-    for (const [key, keywords] of Object.entries(dimensionKeywords)) {
-      if (keywords.some((kw) => section.includes(kw))) {
-        result[key as keyof FiveDimensionResult] = section.trim();
+  // 只按 ## (两个#) 标题分割，不分割 ### 子标题
+  // 这样每个维度下的子标题内容会完整保留
+  const sectionRegex = /^##\s+(.+)$/gm;
+  const matches: { title: string; start: number; end: number }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = sectionRegex.exec(safeText)) !== null) {
+    matches.push({ title: m[1].trim(), start: m.index, end: 0 });
+  }
+
+  // 为每个section确定内容范围（从当前标题到下一个标题）
+  for (let i = 0; i < matches.length; i++) {
+    const startOfContent = safeText.indexOf('\n', matches[i].start) + 1;
+    const endOfContent = i + 1 < matches.length ? matches[i + 1].start : safeText.length;
+    matches[i].end = endOfContent;
+    const content = safeText.substring(startOfContent, endOfContent).trim();
+    const title = matches[i].title;
+
+    // 按优先级顺序匹配，已匹配的维度跳过
+    for (const dimKey of dimensionOrder) {
+      if (result[dimKey]) continue; // 已匹配，跳过
+      if (dimensionKeywords[dimKey].some((kw) => title.includes(kw))) {
+        result[dimKey] = content;
         break;
       }
     }
   }
 
-  // 如果某个维度为空，使用完整文本
-  for (const key of Object.keys(result) as (keyof FiveDimensionResult)[]) {
-    if (!result[key]) {
-      result[key] = safeText;
-      break;
-    }
+  // 如果所有维度都为空，将完整文本放入第一个维度
+  if (!result.anchor_analysis && !result.interaction_analysis) {
+    result.anchor_analysis = safeText;
   }
 
   return result;
