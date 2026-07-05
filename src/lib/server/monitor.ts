@@ -1089,17 +1089,39 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
       ]);
 
       // 构建当前实时数据摘要
+      // fetchAnalysis 返回字段: watcherCnt, peakConcurrentViewers, commentCnt, transactionAmount 等
+      // fetchNewoldData 返回字段: nconversionRate, oconversionRate, ntransactionUserCnt, otransactionUserCnt 等
+      // fetchChartData 返回字段: onlineUserCntList, watcherCntList 等
       const analysis = analysisData.status === 'fulfilled' ? analysisData.value : {};
       const chart = chartData.status === 'fulfilled' ? chartData.value : {};
       const newold = newoldData.status === 'fulfilled' ? newoldData.value : {};
 
+      // 从 analysis 提取统计字段（与 fetchLiveOverview 保持一致）
+      const currentOnline = Number((analysis as Record<string, unknown>).peakConcurrentViewers || 0);
+      const currentViewers = Number((analysis as Record<string, unknown>).watcherCnt || 0);
+      const currentComments = Number((analysis as Record<string, unknown>).commentCnt || 0);
+      const currentAmount = Number((analysis as Record<string, unknown>).transactionAmount || 0);
+
+      // 从 chartData 提取最新在线人数（如果有的话，取列表最后一个值更实时）
+      const onlineList = Array.isArray((chart as Record<string, unknown>).onlineUserCntList)
+        ? (chart as Record<string, unknown>).onlineUserCntList as number[] : [];
+      const latestOnline = onlineList.length > 0 ? Number(onlineList[onlineList.length - 1]) : currentOnline;
+
+      // 从 newold 提取新老粉转化数据
+      const newFanConversionRate = Number((newold as Record<string, string>).nconversionRate || 0);
+      const oldFanConversionRate = Number((newold as Record<string, string>).oconversionRate || 0);
+      const newFanPayCount = Number((newold as Record<string, string>).ntransactionUserCnt || 0);
+      const oldFanPayCount = Number((newold as Record<string, string>).otransactionUserCnt || 0);
+
       const currentData = {
-        viewers: Number(analysis.viewers || 0),
-        online: Number(analysis.online || 0),
-        comments: Number(analysis.comments || 0),
-        amount: Number(analysis.amount || 0),
-        newFans: Number(newold.newFans || 0),
-        oldFans: Number(newold.oldFans || 0),
+        viewers: currentViewers,
+        online: latestOnline || currentOnline,
+        comments: currentComments,
+        amount: currentAmount,
+        newFans: newFanPayCount,
+        oldFans: oldFanPayCount,
+        newFanConversionRate,
+        oldFanConversionRate,
       };
 
       // 获取最近的alerts，用于判断是否重复
@@ -1182,17 +1204,18 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
         }
       }
 
-      // 规则4: 新粉占比过高（可能引流人群不精准）
-      if (currentData.newFans > 0 && currentData.oldFans > 0) {
-        const newFanRatio = currentData.newFans / (currentData.newFans + currentData.oldFans);
-        if (newFanRatio > 0.8) {
+      // 规则4: 新粉占比过高（基于成交人数判断，可能引流人群不精准）
+      const totalFanPay = currentData.newFans + currentData.oldFans;
+      if (totalFanPay > 0) {
+        const newFanRatio = currentData.newFans / totalFanPay;
+        if (newFanRatio > 0.8 && totalFanPay >= 3) {
           const alertKey = `fan_imbalance:新粉占比过高`;
           if (!recentAlertTypes.has(alertKey)) {
             newAlerts.push({
               alertType: 'fan_imbalance',
               severity: 'low',
               title: '新粉占比过高',
-              description: `新粉占比${(newFanRatio * 100).toFixed(1)}%，老粉仅${currentData.oldFans}人，粉丝粘性较低，建议增加老粉互动环节`,
+              description: `成交中新粉占比${(newFanRatio * 100).toFixed(1)}%（${currentData.newFans}/${totalFanPay}），老粉仅${currentData.oldFans}人成交，粉丝粘性较低，建议增加老粉互动环节`,
             });
           }
         }
@@ -1225,7 +1248,8 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
 当前在线：${currentData.online}人，累计观看：${currentData.viewers}次
 评论数：${currentData.comments}条
 成交金额：¥${currentData.amount.toFixed(2)}
-新粉：${currentData.newFans}人，老粉：${currentData.oldFans}人
+新粉转化率：${(currentData.newFanConversionRate * 100).toFixed(1)}%，老粉转化率：${(currentData.oldFanConversionRate * 100).toFixed(1)}%
+新粉成交：${currentData.newFans}人，老粉成交：${currentData.oldFans}人
 
 请严格按JSON格式返回分析结果：
 {"hasAlert":false,"alerts":[]}
