@@ -47,6 +47,190 @@ if (!fs.existsSync(STORAGE_DIR)) {
   fs.mkdirSync(STORAGE_DIR, { recursive: true, mode: 0o755 });
 }
 
+// ==================== 录音文件定时清理 ====================
+
+/** 已转写的文件保留时间（小时），默认6小时 */
+const TRANSCRIBED_RETENTION_HOURS = parseInt(process.env.TRANSCRIBED_RETENTION_HOURS || '6', 10);
+/** 未转写的文件最大保留时间（天），默认3天 */
+const UNTRANSCRIBED_MAX_RETENTION_DAYS = parseInt(process.env.UNTRANSCRIBED_MAX_RETENTION_DAYS || '3', 10);
+/** 磁盘使用率阈值（%），超过则触发紧急清理 */
+const DISK_USAGE_THRESHOLD = parseInt(process.env.DISK_USAGE_THRESHOLD || '80', 10);
+/** 清理检查间隔（毫秒），默认1小时 */
+const CLEANUP_INTERVAL_MS = parseInt(process.env.RECORDING_CLEANUP_INTERVAL_MS || `${60 * 60 * 1000}`, 10);
+
+let cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * 清理录音文件
+ * 策略：
+ * 1. 已转写成功的 MP3，超过 TRANSCRIBED_RETENTION_HOURS 小时后删除
+ * 2. 未转写的 MP3，超过 UNTRANSCRIBED_MAX_RETENTION_DAYS 天后强制删除
+ * 3. 孤立文件（数据库无对应记录），超过1天后删除
+ * 4. 磁盘使用率超过阈值时，紧急清理所有已转写文件
+ */
+export async function cleanupRecordingFiles(): Promise<{
+  deletedCount: number;
+  freedMB: number;
+  details: string[];
+}> {
+  const details: string[] = [];
+  let deletedCount = 0;
+  let freedBytes = 0;
+  const now = Date.now();
+
+  console.log('[Recorder] 开始录音文件清理...');
+
+  const recordingDir = getRecordingDir();
+  if (!fs.existsSync(recordingDir)) {
+    return { deletedCount: 0, freedMB: 0, details: ['录音目录不存在'] };
+  }
+
+  const client = getSupabaseClient();
+
+  // 检查磁盘使用率
+  let diskEmergency = false;
+  try {
+    const { execSync } = require('child_process') as typeof import('child_process');
+    const dfOutput = execSync(`df -B1 ${recordingDir} 2>/dev/null || echo "0 0 0 0 0 -"`).toString();
+    const usagePercent = parseInt(dfOutput.split('\n')[1]?.trim().split(/\s+/)[4] || '0', 10);
+    if (usagePercent >= DISK_USAGE_THRESHOLD) {
+      diskEmergency = true;
+      details.push(`磁盘使用率 ${usagePercent}% 超过阈值 ${DISK_USAGE_THRESHOLD}%，启用紧急清理`);
+    }
+  } catch {
+    // df 不可用时跳过磁盘检查
+  }
+
+  // 获取所有已转写成功的段记录
+  const { data: transcribedSegments } = await client
+    .from('recording_segments')
+    .select('local_path, transcribe_status, created_at')
+    .eq('transcribe_status', 'success');
+
+  const transcribedPaths = new Set(
+    (transcribedSegments || []).map((s: any) => (s.local_path || '') as string).filter(Boolean)
+  );
+
+  // 获取所有段的 local_path（包括未转写的）
+  const { data: allSegments } = await client
+    .from('recording_segments')
+    .select('local_path, transcribe_status, created_at');
+
+  const segmentPathMap = new Map<string, { transcribe_status: string; created_at: string }>();
+  for (const seg of (allSegments || [])) {
+    if (seg.local_path) {
+      segmentPathMap.set(seg.local_path, { transcribe_status: seg.transcribe_status, created_at: seg.created_at });
+    }
+  }
+
+  // 扫描录音目录
+  const files = fs.readdirSync(recordingDir).filter(f => f.endsWith('.mp3'));
+
+  for (const file of files) {
+    const filePath = path.join(recordingDir, file);
+    let shouldDelete = false;
+    let reason = '';
+
+    try {
+      const stat = fs.statSync(filePath);
+      const fileAgeMs = now - stat.mtimeMs;
+      const fileAgeHours = fileAgeMs / (1000 * 60 * 60);
+      const fileAgeDays = fileAgeMs / (1000 * 60 * 60 * 24);
+      const fileSizeMB = stat.size / (1024 * 1024);
+
+      const segInfo = segmentPathMap.get(filePath);
+
+      if (diskEmergency && transcribedPaths.has(filePath)) {
+        // 紧急清理：删除所有已转写文件
+        shouldDelete = true;
+        reason = `紧急清理(已转写, ${fileAgeHours.toFixed(1)}h前)`;
+      } else if (segInfo) {
+        // 有数据库记录
+        if (segInfo.transcribe_status === 'success') {
+          // 已转写成功，保留 N 小时后删除
+          if (fileAgeHours >= TRANSCRIBED_RETENTION_HOURS) {
+            shouldDelete = true;
+            reason = `已转写(${fileAgeHours.toFixed(1)}h前, 阈值${TRANSCRIBED_RETENTION_HOURS}h)`;
+          }
+        } else {
+          // 未转写，保留 N 天后强制删除
+          if (fileAgeDays >= UNTRANSCRIBED_MAX_RETENTION_DAYS) {
+            shouldDelete = true;
+            reason = `未转写超时(${fileAgeDays.toFixed(1)}d前, 阈值${UNTRANSCRIBED_MAX_RETENTION_DAYS}d)`;
+          }
+        }
+      } else {
+        // 孤立文件：数据库无记录，1天后删除
+        if (fileAgeDays >= 1) {
+          shouldDelete = true;
+          reason = `孤立文件(${fileAgeDays.toFixed(1)}d前)`;
+        }
+      }
+
+      if (shouldDelete) {
+        fs.unlinkSync(filePath);
+        deletedCount++;
+        freedBytes += stat.size;
+        details.push(`删除: ${file} (${fileSizeMB.toFixed(1)}MB) - ${reason}`);
+      }
+    } catch (err: any) {
+      details.push(`跳过: ${file} - ${err.message}`);
+    }
+  }
+
+  const freedMB = Math.round(freedBytes / (1024 * 1024) * 100) / 100;
+  const summary = `清理完成: 删除 ${deletedCount} 个文件, 释放 ${freedMB}MB`;
+  console.log(`[Recorder] ${summary}`);
+  if (details.length > 0 && details.length <= 20) {
+    details.forEach(d => console.log(`  - ${d}`));
+  } else if (details.length > 20) {
+    details.slice(0, 10).forEach(d => console.log(`  - ${d}`));
+    console.log(`  ... 共 ${details.length} 条`);
+  }
+
+  return { deletedCount, freedMB, details };
+}
+
+/**
+ * 启动录音文件定时清理
+ */
+export function startRecordingCleanupScheduler(): void {
+  if (cleanupTimer) return; // 防止重复启动
+
+  // 启动后延迟5分钟执行第一次清理，避免干扰启动流程
+  const initialDelay = 5 * 60 * 1000;
+
+  setTimeout(async () => {
+    try {
+      await cleanupRecordingFiles();
+    } catch (err) {
+      console.error('[Recorder] 首次录音清理失败:', err);
+    }
+
+    // 之后定时执行
+    cleanupTimer = setInterval(async () => {
+      try {
+        await cleanupRecordingFiles();
+      } catch (err) {
+        console.error('[Recorder] 定时录音清理失败:', err);
+      }
+    }, CLEANUP_INTERVAL_MS);
+  }, initialDelay);
+
+  console.log(`[Recorder] 录音清理调度器已启动 (间隔${CLEANUP_INTERVAL_MS / 60000}分钟, 已转写保留${TRANSCRIBED_RETENTION_HOURS}小时, 未转写最多${UNTRANSCRIBED_MAX_RETENTION_DAYS}天)`);
+}
+
+/**
+ * 停止录音文件定时清理
+ */
+export function stopRecordingCleanupScheduler(): void {
+  if (cleanupTimer) {
+    clearInterval(cleanupTimer);
+    cleanupTimer = null;
+    console.log('[Recorder] 录音清理调度器已停止');
+  }
+}
+
 // 记录录制分段状态到数据库
 async function saveSegmentRecord(sessionId: number, roomId: string, seq: number, start: Date, end: Date, localPath: string, status: string = 'completed') {
   try {

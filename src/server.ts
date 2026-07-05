@@ -4,6 +4,7 @@ import next from 'next';
 import { globalQueue } from './worker/queue';
 import { processor } from './worker/processor';
 import { initDatabase, migrateFromLocalStorage } from './storage/database/local-storage';
+import { startRecordingCleanupScheduler } from './lib/server/recorder';
 
 const dev = process.env.COZE_PROJECT_ENV !== 'PROD';
 const hostname = process.env.HOSTNAME || 'localhost';
@@ -35,6 +36,9 @@ app.prepare().then(async () => {
 
   // 启动监控任务
   await globalQueue.enqueue('monitor', {}, 3);
+
+  // 启动录音文件定时清理
+  startRecordingCleanupScheduler();
 
   const server = createServer(async (req, res) => {
     try {
