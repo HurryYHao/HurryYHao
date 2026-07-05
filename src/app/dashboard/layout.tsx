@@ -23,7 +23,7 @@ const navigation = [
 ];
 
 function SidebarStatus() {
-  const { polling, togglePolling, lastPollTime, activeSessions, liveRoomCount } = useMonitor();
+  const { polling, togglePolling, lastPollTime, activeSessions, liveRoomCount, nextRefreshIn } = useMonitor();
   return (
     <div className="absolute bottom-6 left-0 right-0 px-4 space-y-3">
       {/* Polling control */}
@@ -55,7 +55,7 @@ function SidebarStatus() {
       <div className="space-y-1.5 px-1">
         {polling && lastPollTime && (
           <p className="text-[11px] text-muted-foreground">
-            上次轮询: {lastPollTime.toLocaleTimeString('zh-CN')}
+            {nextRefreshIn}s后刷新 · {lastPollTime.toLocaleTimeString('zh-CN')}
           </p>
         )}
         {(liveRoomCount > 0 || activeSessions.length > 0) && (
@@ -80,7 +80,7 @@ function SidebarStatus() {
 function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const { activeSessions, polling, liveRoomCount } = useMonitor();
+  const { activeSessions, polling, liveRoomCount, nextRefreshIn } = useMonitor();
 
   return (
     <div className="min-h-screen bg-background">
@@ -159,7 +159,7 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
           )}
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span className={`inline-block h-2 w-2 rounded-full ${polling ? 'bg-green-500' : 'bg-yellow-500'}`} />
-            {polling ? '系统运行中' : '监控暂停'}
+            {polling ? `${nextRefreshIn}s后刷新` : '监控暂停'}
           </div>
         </header>
 

@@ -62,7 +62,7 @@ export default function AlertsPage() {
   // 自动刷新 - 每60秒
   useEffect(() => {
     if (!autoRefresh) return;
-    const interval = setInterval(fetchAlerts, 60000);
+    const interval = setInterval(fetchAlerts, 10000);
     return () => clearInterval(interval);
   }, [autoRefresh, fetchAlerts]);
 

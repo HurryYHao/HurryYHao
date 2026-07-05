@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import {
   Users, Eye, MessageSquare,
@@ -12,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
-import { toast } from 'sonner';
+import { useMonitor } from '@/components/dashboard/monitor-provider';
 
 interface Room {
   id: string;
@@ -36,16 +35,6 @@ interface Room {
   };
 }
 
-interface LiveSummary {
-  totalOnline: number;
-  totalWatch: number;
-  totalComments: number;
-  totalCommenters: number;
-  totalAmount: number;
-  totalOrders: number;
-  liveRoomCount: number;
-}
-
 interface RecordingStatus {
   sessionId: number;
   roomId: string;
@@ -59,21 +48,6 @@ interface RecordingStatus {
   recordingDuration: number | null;
 }
 
-interface NumberAnalysis {
-  total: string;
-  inStart: string;
-  notStart: string;
-}
-
-interface MonitorData {
-  numberAnalysis: NumberAnalysis;
-  rooms: Room[];
-  activeSessions: { id: string; roomId: string; roomName: string; status: string; startTime: string }[];
-  recentSessions: { id: string; roomId: string; roomName: string; status: string; startTime: string; endTime: string }[];
-  recordingStatus?: RecordingStatus[];
-  liveSummary?: LiveSummary;
-}
-
 function formatDuration(minutes: number | null): string {
   if (minutes == null) return '-';
   if (minutes < 60) return `${minutes}分钟`;
@@ -83,33 +57,11 @@ function formatDuration(minutes: number | null): string {
 }
 
 export default function DashboardPage() {
-  const [data, setData] = useState<MonitorData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<'normal' | 'intelligence'>('normal');
+  const { monitorData, dataLoading, manualPoll, manualLoading, nextRefreshIn, lastPollTime } = useMonitor();
+  const activeTab = 'normal';
+  const setActiveTab = (_v: string) => {};
 
-  const fetchData = useCallback(async (showToast = false) => {
-    try {
-      setRefreshing(true);
-      const res = await fetch('/api/monitor/status');
-      const json = await res.json();
-      if (json.success) {
-        setData(json.data);
-        if (showToast) toast.success('数据已刷新');
-      }
-    } catch {
-      if (showToast) toast.error('数据加载失败');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchData();
-    const timer = setInterval(() => fetchData(), 30000);
-    return () => clearInterval(timer);
-  }, [fetchData]);
+  const data = monitorData;
 
   const formatNum = (n: number | undefined | null) => {
     if (n == null) return '-';
@@ -141,12 +93,10 @@ export default function DashboardPage() {
     }
   };
 
-  const summary = data?.liveSummary;
-  const recordingStatus = data?.recordingStatus || [];
-  // 筛选出直播中的房间
-  const liveRooms = (data?.rooms || []).filter(r => r.liveStatus === 'STARTING');
+  const recordingStatus: RecordingStatus[] = data?.recordingStatus || [];
+  const liveRooms: Room[] = (data?.rooms || []).filter(r => r.liveStatus === 'STARTING');
 
-  if (loading) {
+  if (dataLoading) {
     return (
       <div className="space-y-6">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -159,7 +109,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* 页面标题 + 刷新 */}
+      {/* 页面标题 + 实时指示器 */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">直播概览</h1>
@@ -167,15 +117,29 @@ export default function DashboardPage() {
             实时监控鑫云直播平台数据 · 每30分钟自动分析
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => fetchData(true)}
-          disabled={refreshing}
-        >
-          <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
-          刷新
-        </Button>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+            </span>
+            {nextRefreshIn}s后刷新
+            {lastPollTime && (
+              <span className="text-muted-foreground/60">
+                · 上次 {lastPollTime.toLocaleTimeString('zh-CN')}
+              </span>
+            )}
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => manualPoll()}
+            disabled={manualLoading}
+          >
+            <RefreshCw className={`h-4 w-4 mr-2 ${manualLoading ? 'animate-spin' : ''}`} />
+            刷新
+          </Button>
+        </div>
       </div>
 
       {/* ===== 直播中 ===== */}
@@ -206,7 +170,6 @@ export default function DashboardPage() {
                 const isRecording = recordingStatus.some(r => r.roomId === room.roomId);
                 return (
                   <div key={room.roomId} className="flex items-center gap-4 p-3 rounded-lg border border-red-500/10 bg-red-500/5 hover:bg-red-500/10 transition-colors">
-                    {/* 封面缩略图 */}
                     {room.coverUrl ? (
                       <div className="relative w-16 h-16 rounded-md overflow-hidden flex-shrink-0">
                         <img src={room.coverUrl} alt={room.roomName} className="w-full h-full object-cover" />
@@ -222,7 +185,6 @@ export default function DashboardPage() {
                         <Radio className="h-6 w-6 text-red-500" />
                       </div>
                     )}
-                    {/* 房间信息 */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <p className="font-medium text-sm truncate">{room.roomName}</p>
@@ -235,7 +197,6 @@ export default function DashboardPage() {
                           <Badge variant="secondary" className="text-[10px]">智能</Badge>
                         )}
                       </div>
-                      {/* 录制详情（合并自原"正在录制"区域） */}
                       {isRecording && (() => {
                         const rs = recordingStatus.find(r => r.roomId === room.roomId);
                         if (!rs) return null;
@@ -266,7 +227,6 @@ export default function DashboardPage() {
                           </div>
                         );
                       })()}
-                      {/* 无录制状态时显示实时数据 */}
                       {!isRecording && room.liveData ? (
                         <div className="flex items-center gap-4 mt-1.5 text-xs">
                           <span className="flex items-center gap-1 text-primary font-mono">
@@ -288,7 +248,6 @@ export default function DashboardPage() {
                         <p className="text-xs text-muted-foreground mt-1">数据获取中...</p>
                       )}
                     </div>
-                    {/* 操作按钮 */}
                     <Link href={`/dashboard/live?roomId=${room.roomId}`}>
                       <Button variant="outline" size="sm" className="h-7 text-xs">
                         <BarChart3 className="h-3 w-3 mr-1" />
@@ -304,7 +263,7 @@ export default function DashboardPage() {
       )}
 
       {/* 直播间列表 */}
-      <Tabs defaultValue="normal" value={activeTab} onValueChange={(v) => setActiveTab(v as 'normal' | 'intelligence')}>
+      <Tabs defaultValue="normal" value={activeTab} onValueChange={setActiveTab}>
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
@@ -322,7 +281,6 @@ export default function DashboardPage() {
             </div>
           </CardHeader>
           <CardContent>
-            {/* 普通直播内容 */}
             <TabsContent value="normal">
               {data?.rooms && data.rooms.filter(r => r.roomType === 'normal').length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -330,14 +288,9 @@ export default function DashboardPage() {
                     const isRecording = recordingStatus.some(r => r.roomId === room.roomId);
                     return (
                       <Card key={room.roomId} className="overflow-hidden border hover:shadow-md transition-shadow">
-                        {/* 封面图 */}
                         {room.coverUrl && (
                           <div className="relative h-36 bg-muted">
-                            <img
-                              src={room.coverUrl}
-                              alt={room.roomName}
-                              className="w-full h-full object-cover"
-                            />
+                            <img src={room.coverUrl} alt={room.roomName} className="w-full h-full object-cover" />
                             <Badge className={`absolute top-2 right-2 text-xs ${getStatusColor(room.liveStatus)}`}>
                               {getStatusText(room.liveStatus)}
                             </Badge>
@@ -362,7 +315,6 @@ export default function DashboardPage() {
                           {room.description && (
                             <p className="text-xs text-muted-foreground truncate mb-2">{room.description}</p>
                           )}
-                          {/* 直播中的实时数据 */}
                           {room.liveStatus === 'STARTING' && room.liveData && (
                             <div className="grid grid-cols-4 gap-2 mb-2 bg-primary/5 rounded-md p-2">
                               <div className="text-center">
@@ -409,7 +361,6 @@ export default function DashboardPage() {
               )}
             </TabsContent>
 
-            {/* 智能直播内容 */}
             <TabsContent value="intelligence">
               {data?.rooms && data.rooms.filter(r => r.roomType === 'intelligence').length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -417,14 +368,9 @@ export default function DashboardPage() {
                     const isRecording = recordingStatus.some(r => r.roomId === room.roomId);
                     return (
                       <Card key={room.roomId} className="overflow-hidden border hover:shadow-md transition-shadow">
-                        {/* 封面图 */}
                         {room.coverUrl && (
                           <div className="relative h-36 bg-muted">
-                            <img
-                              src={room.coverUrl}
-                              alt={room.roomName}
-                              className="w-full h-full object-cover"
-                            />
+                            <img src={room.coverUrl} alt={room.roomName} className="w-full h-full object-cover" />
                             <Badge className={`absolute top-2 right-2 text-xs ${getStatusColor(room.liveStatus)}`}>
                               {getStatusText(room.liveStatus)}
                             </Badge>
@@ -448,9 +394,7 @@ export default function DashboardPage() {
                               <h3 className="font-medium text-sm truncate mb-1" title={room.templateName}>
                                 {room.templateName}
                               </h3>
-                              <Badge variant="secondary" className="mb-2">
-                                智能模板
-                              </Badge>
+                              <Badge variant="secondary" className="mb-2">智能模板</Badge>
                               <p className="text-xs text-muted-foreground truncate mb-2">{room.roomName}</p>
                             </>
                           ) : (
@@ -461,7 +405,6 @@ export default function DashboardPage() {
                           {room.description && (
                             <p className="text-xs text-muted-foreground truncate mb-2">{room.description}</p>
                           )}
-                          {/* 直播中的实时数据 */}
                           {room.liveStatus === 'STARTING' && room.liveData && (
                             <div className="grid grid-cols-4 gap-2 mb-2 bg-primary/5 rounded-md p-2">
                               <div className="text-center">
