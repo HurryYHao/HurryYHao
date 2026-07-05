@@ -780,8 +780,21 @@ export async function runSegmentAnalysis(sessionId: number, roomId: string): Pro
 
   const nextSeq = (Number(getField(session, 'lastSnapshotSeq', 'last_snapshot_seq')) || 0) + 1;
 
-  // 先抓取数据
-  await fetchAllSnapshotData(sessionId, roomId, nextSeq);
+  // 检查是否已有对应 seq 的有效快照数据（watcher_cnt 非空表示有实际数据）
+  const { data: existingSnapshot } = await client
+    .from('snapshot_data')
+    .select('id, watcher_cnt')
+    .eq('session_id', sessionId)
+    .eq('snapshot_seq', nextSeq)
+    .not('watcher_cnt', 'is', null)
+    .limit(1);
+
+  if (existingSnapshot && existingSnapshot.length > 0) {
+    console.log(`[SegmentAnalysis] 片段${nextSeq}已有有效快照数据，跳过抓取`);
+  } else {
+    // 先抓取数据
+    await fetchAllSnapshotData(sessionId, roomId, nextSeq);
+  }
 
   // 触发并等待音频转写（录制片段完成后转写任务已入队，
   // 这里直接调用 transcribeAudio 确保转写在分析前完成）

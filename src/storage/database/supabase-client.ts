@@ -429,11 +429,20 @@ class DbQueryBuilder {
     for (const row of rowList) {
       const snakeRow = convertRowToSnake(row);
       const columns = Object.keys(snakeRow);
-      const values = Object.values(snakeRow);
-      const placeholders = values.map((_, i) => `$${i + 1}`);
+      // 对 object/array 值序列化为 JSON 字符串，并在 placeholder 中加 ::jsonb 类型转换
+      const processedValues: unknown[] = [];
+      const placeholders = columns.map((col, _i) => {
+        const val = snakeRow[col];
+        if (val !== null && val !== undefined && (typeof val === 'object' || Array.isArray(val))) {
+          processedValues.push(JSON.stringify(val));
+          return `$${processedValues.length}::jsonb`;
+        }
+        processedValues.push(val);
+        return `$${processedValues.length}`;
+      });
 
       const sql = `INSERT INTO ${this._dbTableName} (${columns.join(', ')}) VALUES (${placeholders.join(', ')}) RETURNING *`;
-      const result = await query(sql, values);
+      const result = await query(sql, processedValues);
       if (result.rows.length > 0) {
         results.push(convertRowToCamel(result.rows[0]));
       }
@@ -447,8 +456,17 @@ class DbQueryBuilder {
 
     const snakeRow = convertRowToSnake(this._upsertRow);
     const columns = Object.keys(snakeRow);
-    const values = Object.values(snakeRow);
-    const placeholders = values.map((_, i) => `$${i + 1}`);
+    // 对 object/array 值序列化为 JSON 字符串，并加 ::jsonb 类型转换
+    const values: unknown[] = [];
+    const placeholders = columns.map((col, _i) => {
+      const val = snakeRow[col];
+      if (val !== null && val !== undefined && (typeof val === 'object' || Array.isArray(val))) {
+        values.push(JSON.stringify(val));
+        return `$${values.length}::jsonb`;
+      }
+      values.push(val);
+      return `$${values.length}`;
+    });
 
     // Default to 'id' as conflict column since all tables have id as PK
     // Support comma-separated onConflict like 'category,dimension,key'
@@ -461,9 +479,19 @@ class DbQueryBuilder {
 
     let sql = `INSERT INTO ${this._dbTableName} (${columns.join(', ')}) VALUES (${placeholders.join(', ')})`;
     if (updateCols.length > 0) {
-      const updateSet = updateCols.map((c, i) => `${c} = $${values.length + i + 1}`).join(', ');
-      const updateValues = updateCols.map(c => snakeRow[c]);
-      sql += ` ON CONFLICT (${conflictColStr}) DO UPDATE SET ${updateSet} RETURNING *`;
+      const updateSet: string[] = [];
+      const updateValues: unknown[] = [];
+      for (const c of updateCols) {
+        const val = snakeRow[c];
+        if (val !== null && val !== undefined && (typeof val === 'object' || Array.isArray(val))) {
+          updateValues.push(JSON.stringify(val));
+          updateSet.push(`${c} = $${values.length + updateValues.length}::jsonb`);
+        } else {
+          updateValues.push(val);
+          updateSet.push(`${c} = $${values.length + updateValues.length}`);
+        }
+      }
+      sql += ` ON CONFLICT (${conflictColStr}) DO UPDATE SET ${updateSet.join(', ')} RETURNING *`;
       const result = await query(sql, [...values, ...updateValues]);
       const data = result.rows.map(convertRowToCamel);
       return { data, error: null };
@@ -479,8 +507,16 @@ class DbQueryBuilder {
     if (!this._updateData) return { data: null, error: new Error('No data to update') };
 
     const snakeUpdates = convertRowToSnake(this._updateData);
-    const setClauses = Object.keys(snakeUpdates).map((col, i) => `${col} = $${this._whereParams.length + i + 1}`);
-    const setValues = Object.values(snakeUpdates);
+    const setValues: unknown[] = [];
+    const setClauses = Object.keys(snakeUpdates).map((col, _i) => {
+      const val = snakeUpdates[col];
+      if (val !== null && val !== undefined && (typeof val === 'object' || Array.isArray(val))) {
+        setValues.push(JSON.stringify(val));
+        return `${col} = $${this._whereParams.length + setValues.length}::jsonb`;
+      }
+      setValues.push(val);
+      return `${col} = $${this._whereParams.length + setValues.length}`;
+    });
 
     let sql = `UPDATE ${this._dbTableName} SET ${setClauses.join(', ')}`;
     const whereClause = this._buildWhereClause();

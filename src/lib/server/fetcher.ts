@@ -298,7 +298,8 @@ export function extractAudienceComments(records: Record<string, unknown>[]): Arr
   return comments;
 }
 
-function normalizeTimeLabel(baseTime: Date, label: string): Date {
+function normalizeTimeLabel(baseTime: Date, label: string | undefined | null): Date {
+  if (!label || typeof label !== 'string') return new Date(baseTime);
   const match = label.match(/(\d{1,2}):(\d{2})/);
   if (!match) return new Date(baseTime);
   const normalized = new Date(baseTime);

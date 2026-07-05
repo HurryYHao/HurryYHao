@@ -18,6 +18,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : '片段分析失败';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    const stack = err instanceof Error ? err.stack : '';
+    console.error(`[SegmentAPI] 片段分析失败:`, message, stack);
+    return NextResponse.json({ success: false, error: message, stack: stack?.split('\n').slice(0, 5) }, { status: 500 });
   }
 }

@@ -204,7 +204,7 @@ async function getPreviousSessionComparison(
   // 提取上一场核心指标
   let prevMetrics = '';
   if (prevSnapshots && prevSnapshots.length > 0) {
-    const rawJson = (prevSnapshots[0] as Record<string, unknown>).raw_json as Record<string, unknown> | null;
+    const rawJson = (prevSnapshots[0] as Record<string, unknown>).rawJson as Record<string, unknown> | null;
     if (rawJson) {
       const analysis = (rawJson.analysis as Record<string, unknown>) || {};
       const orderSummary = (rawJson.orderSummary as Record<string, unknown>) || {};
@@ -274,7 +274,7 @@ async function getBenchmarkAnchorData(anchorName: string): Promise<string> {
       .limit(1);
 
     if (snaps && snaps.length > 0) {
-      const rawJson = (snaps[0] as Record<string, unknown>).raw_json as Record<string, unknown> | null;
+      const rawJson = (snaps[0] as Record<string, unknown>).rawJson as Record<string, unknown> | null;
       if (rawJson) {
         const a = (rawJson.analysis as Record<string, unknown>) || {};
         const o = (rawJson.orderSummary as Record<string, unknown>) || {};
@@ -635,12 +635,13 @@ function buildCommentsData(
   // Negative warnings
   const negativeComments = filtered.filter(c => negativeWords.some(w => String(c.content || '').includes(w)));
 
-  // Build comments sample with timestamps
-  const commentSample = filtered.slice(0, 50).map((c) => {
+  // Build comments sample with timestamps (limit 30 comments, truncate each to 60 chars)
+  const commentSample = filtered.slice(0, 30).map((c) => {
     const ts = Number(c.timestamp || 0);
     const timeStr = ts > 0 ? formatTimestamp(ts) : '--:--:--';
     const userTag = c.isNewUser ? '[新]' : '[老]';
-    return `${timeStr} ${userTag}${c.nickname || '匿名'}: ${c.content}`;
+    const content = String(c.content || '').substring(0, 60);
+    return `${timeStr} ${userTag}${c.nickname || '匿名'}: ${content}`;
   }).join('\n');
 
   return `
@@ -774,7 +775,8 @@ function buildAnalysisPrompt(
 
   // For segment analysis: determine the time window
   const lastSnap = snapshotData[snapshotData.length - 1];
-  const snapshotTime = lastSnap?.snapshot_time ? new Date(String(lastSnap.snapshot_time)) : null;
+  const snapshotTimeVal = lastSnap?.snapshotTime ?? lastSnap?.snapshot_time;
+  const snapshotTime = snapshotTimeVal ? new Date(String(snapshotTimeVal)) : null;
 
   // For segment: window is last 30 min before snapshot_time
   // For final: window is entire session
@@ -839,7 +841,7 @@ function buildAnalysisPrompt(
 人均产值(成交/场观): ${Number(watcherCnt) > 0 && Number(transactionAmount) > 0 ? '¥' + (Number(transactionAmount) / Number(watcherCnt)).toFixed(2) : 'N/A'}
 平均观看时长: ${avgWatchTime}秒
 
-${filteredTranscription ? `【主播语音转写】\n${filteredTranscription}\n` : '【主播语音转写】暂无转写数据'}
+${filteredTranscription ? `【主播语音转写】\n${filteredTranscription.substring(0, 5000)}${filteredTranscription.length > 5000 ? '\n...（转写文字过长已截断）' : ''}\n` : '【主播语音转写】暂无转写数据'}
 
 ${buildNewoldData(newoldData)}
 
@@ -867,7 +869,8 @@ ${buildCommentsData(comments, windowStart, windowEnd)}
       .filter(Boolean)
       .join('\n\n');
     if (transcriptions) {
-      fullScript = `\n【整场直播完整脚本】\n${transcriptions}\n`;
+      const trimmed = transcriptions.length > 15000 ? transcriptions.substring(0, 15000) + '\n...（脚本过长已截断）' : transcriptions;
+      fullScript = `\n【整场直播完整脚本】\n${trimmed}\n`;
     }
   }
 
@@ -914,6 +917,14 @@ ${previousSessionComparison ? '- 与前一场对比时标注【前场对比】' 
  * 采用多模型并发调用策略：发送请求给多个模型，返回最先完成且成功的结果
  */
 async function callLLMAnalysis(prompt: string): Promise<string> {
+  // 限制 prompt 长度，防止超出模型 token 上限（128K chars ≈ 32K tokens）
+  const MAX_PROMPT_LENGTH = 80000;
+  let effectivePrompt = prompt;
+  if (prompt.length > MAX_PROMPT_LENGTH) {
+    console.warn(`[Analyzer] Prompt 过长 (${prompt.length} chars)，截断到 ${MAX_PROMPT_LENGTH}`);
+    effectivePrompt = prompt.substring(0, MAX_PROMPT_LENGTH) + '\n\n[注意：数据已因长度限制截断，请基于已有数据进行分析]';
+  }
+
   const messages = [
     {
       role: 'system' as const,
@@ -921,19 +932,9 @@ async function callLLMAnalysis(prompt: string): Promise<string> {
     },
     {
       role: 'user' as const,
-      content: prompt,
+      content: effectivePrompt,
     },
   ];
-
-  // 打印发送给AI的完整数据
-  console.log('='.repeat(100));
-  console.log('[Analyzer] 发送给AI的完整Prompt数据:');
-  console.log('='.repeat(100));
-  console.log('System Message:', messages[0].content);
-  console.log('='.repeat(50));
-  console.log('User Message (完整Prompt):');
-  console.log(prompt);
-  console.log('='.repeat(100));
 
   // 定义模型调用策略：使用 coze-coding-dev-sdk 支持的所有模型，并发调用，谁先返回用谁
   const modelsToTry = [
@@ -950,6 +951,8 @@ async function callLLMAnalysis(prompt: string): Promise<string> {
     { model: 'minimax-m2-7-260318', name: 'MiniMax M2.7' },
     { model: 'qwen-3-5-plus-260215', name: 'Qwen 3.5 Plus' },
   ];
+
+  console.log(`[Analyzer] 发送AI分析: prompt长度=${effectivePrompt.length} chars, 模型数=${modelsToTry.length}`);
 
   console.log(`[Analyzer] 启动多模型并发分析, 参与模型: ${modelsToTry.map(m => m.name).join(', ')}`);
 
@@ -968,8 +971,8 @@ async function callLLMAnalysis(prompt: string): Promise<string> {
           temperature: 0.4,
         });
         
-        if (!response || response.trim().length === 0) {
-          throw new Error('返回了空响应');
+        if (!response || response.trim().length < 50) {
+          throw new Error(`返回响应过短(${response?.trim().length || 0}字符)，视为无效`);
         }
         console.log(`[Analyzer] 并发任务成功返回: ${config.name}`);
         return response;
@@ -1218,14 +1221,14 @@ export async function upsertAnchorProfile(anchorName: string): Promise<void> {
     const snapshot = snapshots?.[0] as any;
     if (!snapshot) continue;
 
-    const rawJson = snapshot.raw_json || {};
+    const rawJson = snapshot.rawJson || snapshot.raw_json || {};
     const analysis = rawJson.analysis || {};
     const orderDetails = Array.isArray(rawJson.orderDetails) ? rawJson.orderDetails : [];
     const productClickCnt = Number(analysis.productClickCnt || 0);
     const payUserCnt = Number(analysis.payUserCnt || 0);
-    const online = toNumber(snapshot.online_user_cnt || analysis.peakConcurrentViewers || 0);
-    const comments = toNumber(snapshot.comment_cnt || analysis.commentCnt || 0);
-    const viewers = toNumber(snapshot.watcher_cnt || analysis.watcherCnt || 0);
+    const online = toNumber(snapshot.onlineUserCnt || snapshot.online_user_cnt || analysis.peakConcurrentViewers || 0);
+    const comments = toNumber(snapshot.commentCnt || snapshot.comment_cnt || analysis.commentCnt || 0);
+    const viewers = toNumber(snapshot.watcherCnt || snapshot.watcher_cnt || analysis.watcherCnt || 0);
 
     snapshotMetrics.push({
       sales: toNumber(snapshot.order_total || analysis.transactionAmount || 0),
@@ -1690,6 +1693,20 @@ export async function runAnalysis(
   segmentSeq: number,
   reportType: 'segment' | 'final'
 ): Promise<number> {
+  try {
+  return await _runAnalysisImpl(sessionId, roomId, segmentSeq, reportType);
+  } catch (err) {
+    console.error(`[runAnalysis] 详细错误:`, err);
+    throw err;
+  }
+}
+
+async function _runAnalysisImpl(
+  sessionId: number,
+  roomId: string,
+  segmentSeq: number,
+  reportType: 'segment' | 'final'
+): Promise<number> {
   console.log(`[runAnalysis] 开始分析: session=${sessionId}, room=${roomId}, type=${reportType}, seq=${segmentSeq}`);
   const client = getSupabaseClient();
 
@@ -1752,9 +1769,10 @@ export async function runAnalysis(
   }
 
   // 终场分析使用所有快照，片段分析只使用对应快照
+  // DbQueryBuilder 自动将 snake_case 转为 camelCase，需兼容两种字段名
   let analysisSnapshots = reportType === REPORT_TYPE.FINAL
     ? snapshots
-    : snapshots.filter((s) => s.snapshot_seq === segmentSeq);
+    : snapshots.filter((s) => (s.snapshotSeq ?? s.snapshot_seq) === segmentSeq);
 
   if (analysisSnapshots.length === 0 && reportType !== REPORT_TYPE.FINAL) {
     // 如果指定片段没有数据，使用最新的快照
@@ -1799,8 +1817,27 @@ export async function runAnalysis(
     benchmarkAnchorData
   );
 
-  // 调用 LLM 分析
-  const analysisText = await callLLMAnalysis(prompt);
+  // 调用 LLM 分析（内容审核拒绝时加强过滤后重试一次）
+  let analysisText: string;
+  try {
+    analysisText = await callLLMAnalysis(prompt);
+  } catch (llmError: unknown) {
+    const errMsg = llmError instanceof Error ? llmError.message : String(llmError);
+    // 如果因内容审核失败，加强过滤后重试一次
+    if (errMsg.includes('DataInspectionFailed') || errMsg.includes('inappropriate content') || errMsg.includes('低俗') || errMsg.includes('色情')) {
+      console.log(`[runAnalysis] LLM内容审核拒绝，加强过滤后重试...`);
+      // 对 prompt 做一次更激进的过滤
+      const aggressiveFiltered = filterContent(prompt, true);
+      try {
+        analysisText = await callLLMAnalysis(aggressiveFiltered.filtered);
+      } catch (retryError: unknown) {
+        console.error(`[runAnalysis] 加强过滤版仍被拒绝，放弃重试`);
+        throw retryError;
+      }
+    } else {
+      throw llmError;
+    }
+  }
 
   // 提取五维分析和 JSON
   const extracted = extractJsonAndMarkdown(analysisText);
@@ -1813,10 +1850,54 @@ export async function runAnalysis(
   const actionItems = extractActionItems(markdownText, jsonData);
   const highlights = extractHighlights(markdownText, jsonData);
 
+  // 安全序列化 analysis_json，确保写入 jsonb 不会因非法字符失败
+  let safeAnalysisJson: any = {};
+  try {
+    // 深度清理：递归移除所有 undefined 值和非法 JSON 字符
+    function sanitizeForJson(obj: any): any {
+      if (obj === null || obj === undefined) return null;
+      if (typeof obj === 'number') return Number.isFinite(obj) ? obj : null;
+      if (typeof obj === 'boolean') return obj;
+      if (typeof obj === 'string') {
+        // 只移除 NUL 字符，不手动转义反斜杠（JSON.stringify 会自动处理）
+        return obj.replace(/\0/g, '');
+      }
+      if (Array.isArray(obj)) return obj.map(sanitizeForJson);
+      if (typeof obj === 'object') {
+        const result: any = {};
+        for (const [key, value] of Object.entries(obj)) {
+          if (value !== undefined) {
+            result[key] = sanitizeForJson(value);
+          }
+        }
+        return result;
+      }
+      return String(obj);
+    }
+    const sanitized = sanitizeForJson(jsonData);
+    const jsonStr = JSON.stringify(sanitized);
+    safeAnalysisJson = JSON.parse(jsonStr); // round-trip 确保合法
+    console.log(`[Analyzer] safeAnalysisJson 序列化成功，长度=${jsonStr.length}`);
+  } catch (e) {
+    console.warn('[Analyzer] analysis_json 序列化安全处理:', e);
+    safeAnalysisJson = { scores: jsonData?.scores || {}, raw_error: 'JSON round-trip failed' };
+  }
+
   // 存储分析报告（含主播名称和模板名称）
-  const { data, error } = await client
-    .from('analysis_reports')
-    .insert({
+  let insertData: Record<string, unknown>;
+  try {
+    // 清理所有字符串字段中的非法字符
+    function cleanStr(v: unknown): unknown {
+      if (typeof v === 'string') return v.replace(/\0/g, '');
+      if (Array.isArray(v)) return v.map(cleanStr);
+      if (v && typeof v === 'object') {
+        const r: any = {};
+        for (const [k, val] of Object.entries(v)) r[k] = cleanStr(val);
+        return r;
+      }
+      return v;
+    }
+    insertData = {
       session_id: sessionId,
       report_type: reportType,
       segment_seq: segmentSeq,
@@ -1825,8 +1906,8 @@ export async function runAnalysis(
       conversion_analysis: dimensions.conversion_analysis,
       sentiment_analysis: dimensions.sentiment_analysis,
       rhythm_analysis: dimensions.rhythm_analysis,
-      analysis_text: markdownText,
-      analysis_json: jsonData,
+      analysis_text: (markdownText || '').replace(/\0/g, ''),
+      analysis_json: cleanStr(safeAnalysisJson),
       skill_version: skill.version,
       model_used: 'doubao-seed-2-0-pro-260215',
       anchor_name: anchorName,
@@ -1838,10 +1919,59 @@ export async function runAnalysis(
       conversion_score: scores.conversion || null,
       sentiment_score: scores.sentiment || null,
       rhythm_score: scores.rhythm || null,
-      alerts: alerts,
-      action_items: actionItems,
-      highlights: highlights,
-    })
+      alerts: cleanStr(alerts),
+      action_items: cleanStr(actionItems),
+      highlights: cleanStr(highlights),
+    };
+
+    // 调试：预序列化检查
+    const jsonCheck = JSON.stringify(insertData);
+    console.log(`[Analyzer] Insert data JSON check passed, length=${jsonCheck.length}`);
+    // 逐一检查 jsonb 字段
+    for (const field of ['analysis_json', 'alerts', 'action_items', 'highlights']) {
+      const val = insertData[field];
+      try {
+        const s = JSON.stringify(val);
+        JSON.parse(s); // 验证可 round-trip
+      } catch (e) {
+        console.error(`[Analyzer] JSONB字段 ${field} 检查失败:`, e);
+        insertData[field] = {};
+      }
+    }
+  } catch (jsonErr) {
+    console.error('[Analyzer] Insert data JSON 预检查失败:', jsonErr);
+    // 降级：移除可能有问题的字段
+    insertData = {
+      session_id: sessionId,
+      report_type: reportType,
+      segment_seq: segmentSeq,
+      anchor_analysis: dimensions.anchor_analysis?.substring(0, 5000) || '',
+      interaction_analysis: dimensions.interaction_analysis?.substring(0, 5000) || '',
+      conversion_analysis: dimensions.conversion_analysis?.substring(0, 5000) || '',
+      sentiment_analysis: dimensions.sentiment_analysis?.substring(0, 5000) || '',
+      rhythm_analysis: dimensions.rhythm_analysis?.substring(0, 5000) || '',
+      analysis_text: (markdownText || '').substring(0, 10000).replace(/\0/g, ''),
+      analysis_json: {},
+      skill_version: skill.version,
+      model_used: 'doubao-seed-2-0-pro-260215',
+      anchor_name: anchorName,
+      template_name: templateName,
+      room_type: si.roomType,
+      overall_score: scores.overall || null,
+      anchor_score: scores.anchor || null,
+      interaction_score: scores.interaction || null,
+      conversion_score: scores.conversion || null,
+      sentiment_score: scores.sentiment || null,
+      rhythm_score: scores.rhythm || null,
+      alerts: [],
+      action_items: [],
+      highlights: [],
+    };
+  }
+
+  const { data, error } = await client
+    .from('analysis_reports')
+    .insert(insertData)
     .select('id')
     .single();
 
@@ -1936,7 +2066,7 @@ async function autoFillLiveScript(
 
   // 从快照数据提取商品和成交信息
   const lastSnap = snapshots[snapshots.length - 1];
-  const rawJson = lastSnap?.raw_json as Record<string, unknown> | null;
+  const rawJson = (lastSnap?.rawJson ?? lastSnap?.raw_json) as Record<string, unknown> | null;
   const orderDetails = rawJson ? (rawJson.orderDetails as Record<string, unknown>[]) : [];
   const orderSummary = rawJson ? (rawJson.orderSummary as Record<string, unknown>) : {};
 
@@ -2011,7 +2141,7 @@ export async function* streamAnalysis(
 
   const analysisSnapshots = reportType === REPORT_TYPE.FINAL
     ? snapshots
-    : snapshots.filter((s) => s.snapshot_seq === segmentSeq);
+    : snapshots.filter((s) => (s.snapshotSeq ?? s.snapshot_seq) === segmentSeq);
 
   const goodsNames = extractGoodsNamesFromSnapshots(analysisSnapshots.length > 0 ? analysisSnapshots : snapshots);
   const memoryContext = await memoryManager.getContextForAnalysis(anchorName, goodsNames);
@@ -2729,23 +2859,11 @@ function buildProductAnalysisPrompt(productData: {
 【最佳场次】
 - 直播间: ${productData.best_session.live_sessions?.room_name || '未知'}
 - 主播: ${productData.best_session.live_sessions?.anchor_name || '未知'}
-- 时间: ${productData.best_session.snapshot_time ? new Date(productData.best_session.snapshot_time).toLocaleString('zh-CN') : '未知'}
+- 时间: ${(productData.best_session.snapshotTime ?? productData.best_session.snapshot_time) ? new Date(String(productData.best_session.snapshotTime ?? productData.best_session.snapshot_time)).toLocaleString('zh-CN') : '未知'}
 - 点击数: ${productData.best_session.click_count || 0}
 - 下单数: ${productData.best_session.order_count || 0}
 - 支付数: ${productData.best_session.paid_count || 0}
 - 成交金额: ¥${productData.best_session.pay_amount || 0}
-` : '';
-
-  // 格式化最差场次信息
-  const worstSessionInfo = productData.worst_session ? `
-【最差场次】
-- 直播间: ${productData.worst_session.live_sessions?.room_name || '未知'}
-- 主播: ${productData.worst_session.live_sessions?.anchor_name || '未知'}
-- 时间: ${productData.worst_session.snapshot_time ? new Date(productData.worst_session.snapshot_time).toLocaleString('zh-CN') : '未知'}
-- 点击数: ${productData.worst_session.click_count || 0}
-- 下单数: ${productData.worst_session.order_count || 0}
-- 支付数: ${productData.worst_session.paid_count || 0}
-- 成交金额: ¥${productData.worst_session.pay_amount || 0}
 ` : '';
 
   // 格式化近期场次信息
@@ -2784,8 +2902,6 @@ ${memoryContext}
 - 点击→支付转化率: ${productData.summary.avg_click_to_pay_rate}%
 
 ${bestSessionInfo}
-
-${worstSessionInfo}
 
 ${recentSessionsInfo}
 
