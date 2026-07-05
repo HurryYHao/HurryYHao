@@ -25,7 +25,7 @@ const navigation = [
 ];
 
 function SidebarStatus() {
-  const { polling, togglePolling, lastPollTime, activeSessions } = useMonitor();
+  const { polling, togglePolling, lastPollTime, activeSessions, liveRoomCount } = useMonitor();
   return (
     <div className="absolute bottom-6 left-0 right-0 px-4 space-y-3">
       {/* Polling control */}
@@ -60,12 +60,16 @@ function SidebarStatus() {
             上次轮询: {lastPollTime.toLocaleTimeString('zh-CN')}
           </p>
         )}
-        {activeSessions.length > 0 && (
-          <p className="text-[11px] text-primary font-medium">
-            {activeSessions.length} 场直播进行中
+        {(liveRoomCount > 0 || activeSessions.length > 0) && (
+          <p className="text-[11px] text-red-600 font-medium flex items-center gap-1">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+            </span>
+            {liveRoomCount > 0 ? `${liveRoomCount} 场直播中` : `${activeSessions.length} 场录制中`}
           </p>
         )}
-        {!polling && activeSessions.length === 0 && (
+        {!polling && liveRoomCount === 0 && activeSessions.length === 0 && (
           <p className="text-[11px] text-muted-foreground">
             当前无活跃直播
           </p>
@@ -78,6 +82,7 @@ function SidebarStatus() {
 function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { activeSessions, polling, liveRoomCount } = useMonitor();
 
   return (
     <div className="min-h-screen bg-background">
@@ -144,9 +149,19 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
             </svg>
           </button>
           <div className="flex-1" />
+          {/* 直播监控中标识 */}
+          {(liveRoomCount > 0 || activeSessions.length > 0) && (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-500/10 border border-red-500/20 text-sm font-medium text-red-600">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+              </span>
+              直播监控中 · {liveRoomCount || activeSessions.length}场
+            </div>
+          )}
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
-            系统运行中
+            <span className={`inline-block h-2 w-2 rounded-full ${polling ? 'bg-green-500' : 'bg-yellow-500'}`} />
+            {polling ? '系统运行中' : '监控暂停'}
           </div>
         </header>
 

@@ -31,4 +31,8 @@ echo "Clearing port ${DEPLOY_RUN_PORT} before start."
 kill_port_if_listening
 echo "Starting HTTP service on port ${DEPLOY_RUN_PORT} for dev..."
 
-PORT=${DEPLOY_RUN_PORT} pnpm tsx watch src/server.ts
+# 确保 tsx 输出同时写入 app.log（运行时日志持久化）
+LOG_DIR="/app/work/logs/bypass"
+mkdir -p "${LOG_DIR}"
+
+PORT=${DEPLOY_RUN_PORT} pnpm tsx watch src/server.ts 2>&1 | tee -a "${LOG_DIR}/app.log"

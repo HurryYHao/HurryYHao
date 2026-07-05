@@ -22,6 +22,8 @@ interface MonitorState {
   manualLoading: boolean;
   /** 活跃会话列表 */
   activeSessions: SessionInfo[];
+  /** 直播中的房间数量 (liveStatus=STARTING) */
+  liveRoomCount: number;
   /** 操作日志 */
   logs: LogEntry[];
   /** 添加日志 */
@@ -49,6 +51,7 @@ export function MonitorProvider({ children }: { children: React.ReactNode }) {
   const [hydrated, setHydrated] = useState(false);
   const [manualLoading, setManualLoading] = useState(false);
   const [activeSessions, setActiveSessions] = useState<SessionInfo[]>([]);
+  const [liveRoomCount, setLiveRoomCount] = useState(0);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [lastPollTime, setLastPollTime] = useState<Date | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -78,6 +81,11 @@ export function MonitorProvider({ children }: { children: React.ReactNode }) {
       const json = await res.json();
       if (json.success) {
         setActiveSessions(json.data.activeSessions || []);
+        // 统计直播中的房间数（liveStatus=STARTING 表示直播中）
+        const liveRooms = (json.data.rooms || []).filter(
+          (r: { liveStatus: string }) => r.liveStatus === 'STARTING'
+        );
+        setLiveRoomCount(liveRooms.length);
         setLastPollTime(new Date());
         
         const roomCount = json.data.rooms?.length || 0;
@@ -142,6 +150,10 @@ export function MonitorProvider({ children }: { children: React.ReactNode }) {
       const json = await res.json();
       if (json.success) {
         setActiveSessions(json.data.activeSessions || []);
+        const liveRooms = (json.data.rooms || []).filter(
+          (r: { liveStatus: string }) => r.liveStatus === 'STARTING'
+        );
+        setLiveRoomCount(liveRooms.length);
         setLastPollTime(new Date());
         addLog('info', `手动轮询成功: ${json.data.rooms?.length || 0} 个房间`);
         toast.success('轮询成功');
@@ -201,7 +213,7 @@ export function MonitorProvider({ children }: { children: React.ReactNode }) {
 
   const value: MonitorState = {
     polling, togglePolling, manualPoll, manualLoading,
-    activeSessions, logs, addLog, lastPollTime,
+    activeSessions, liveRoomCount, logs, addLog, lastPollTime,
     snapshot, analyze,
   };
 

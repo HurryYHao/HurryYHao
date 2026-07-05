@@ -5,6 +5,7 @@ import { globalQueue } from './worker/queue';
 import { processor } from './worker/processor';
 import { initDatabase, migrateFromLocalStorage } from './storage/database/local-storage';
 import { startRecordingCleanupScheduler } from './lib/server/recorder';
+import { logger } from './lib/server/logger';
 
 const dev = process.env.COZE_PROJECT_ENV !== 'PROD';
 const hostname = process.env.HOSTNAME || 'localhost';
@@ -18,17 +19,17 @@ app.prepare().then(async () => {
   // 初始化数据库连接
   try {
     await initDatabase();
-    console.log('[DB] 数据库连接成功');
+    logger.info('[DB] 数据库连接成功');
     
     // 迁移 storage.json 中的历史数据到数据库
     try {
       await migrateFromLocalStorage();
     } catch (e) {
-      console.warn('[DB] 数据迁移跳过:', (e as Error).message);
+      logger.warn('[DB] 数据迁移跳过:', (e as Error).message);
     }
   } catch (e) {
-    console.error('[DB] 数据库初始化失败:', (e as Error).message);
-    console.warn('[DB] 将使用降级模式运行');
+    logger.error('[DB] 数据库初始化失败:', (e as Error).message);
+    logger.warn('[DB] 将使用降级模式运行');
   }
   // 启动后台队列和处理器
   await globalQueue.start();
@@ -45,17 +46,17 @@ app.prepare().then(async () => {
       const parsedUrl = parse(req.url!, true);
       await handle(req, res, parsedUrl);
     } catch (err) {
-      console.error('Error occurred handling', req.url, err);
+      logger.error('Error occurred handling', req.url, err);
       res.statusCode = 500;
       res.end('Internal server error');
     }
   });
   server.once('error', err => {
-    console.error(err);
+    logger.error(err);
     process.exit(1);
   });
   server.listen(port, () => {
-    console.log(
+    logger.info(
       `> Server listening at http://${hostname}:${port} as ${
         dev ? 'development' : process.env.COZE_PROJECT_ENV
       }`,
