@@ -1252,8 +1252,8 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
 - 新粉占比高是社群裂变效果好的正向信号，不是问题
 
 直播间：${sRoomName}
-当前在线：${currentData.online}人，累计观看：${currentData.viewers}次
-评论数：${currentData.comments}条
+当前在线：${currentData.online}人，累计观看人数：${currentData.viewers}人
+评论数：${currentData.comments}条（注意：评论数≠评论人数，评论数是总条数）
 成交金额：¥${currentData.amount.toFixed(2)}
 新粉转化率：${(currentData.newFanConversionRate * 100).toFixed(1)}%，老粉转化率：${(currentData.oldFanConversionRate * 100).toFixed(1)}%
 新粉成交：${currentData.newFans}人，老粉成交：${currentData.oldFans}人

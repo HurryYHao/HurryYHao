@@ -775,8 +775,22 @@ function buildAnalysisDataMarkdown(
   snapshotData: Record<string, unknown>[],
   reportType: 'segment' | 'final',
   segmentSeq: number,
+  sessionStartTime: string | null = null,
 ): string {
   const typeLabel = reportType === REPORT_TYPE.FINAL ? '终场综合' : `第${segmentSeq}片段(近30分钟)`;
+
+  // 计算直播已进行时长
+  let liveDuration = '';
+  if (sessionStartTime && reportType !== REPORT_TYPE.FINAL) {
+    const start = new Date(sessionStartTime);
+    const elapsed = Date.now() - start.getTime();
+    const hours = Math.floor(elapsed / 3600000);
+    const minutes = Math.floor((elapsed % 3600000) / 60000);
+    liveDuration = `，直播已进行约${hours}小时${minutes}分钟`;
+  }
+  const segmentContext = reportType === REPORT_TYPE.FINAL
+    ? '终场综合分析（整场直播）'
+    : `这是本场直播的第${segmentSeq}个30分钟片段${liveDuration}。${segmentSeq === 1 ? '这是直播开场阶段。' : segmentSeq === 2 ? '这是直播前中期阶段。' : segmentSeq <= 4 ? '这是直播中段阶段，主播已进入核心内容。' : '这是直播后期阶段，主播应已进入深度内容和促单环节。'}请不要将非第1片段标注为"开场暖场"。`;
 
   // For segment analysis: determine the time window
   const mdLastSnap = snapshotData[snapshotData.length - 1];
@@ -796,7 +810,8 @@ function buildAnalysisDataMarkdown(
   const sections: string[] = [];
 
   sections.push(`# 直播数据分析资料 - ${typeLabel}`);
-  sections.push(`\n> 生成时间: ${new Date().toISOString()}\n`);
+  sections.push(`\n> 生成时间: ${new Date().toISOString()}`);
+  sections.push(`> **片段上下文**: ${segmentContext}\n`);
 
   for (let idx = 0; idx < snapshotData.length; idx++) {
     const snap = snapshotData[idx];
@@ -839,8 +854,8 @@ function buildAnalysisDataMarkdown(
     sections.push(`| 当前/峰值在线人数 | ${displayOnline}${reportType !== REPORT_TYPE.FINAL ? ` (平均${avgOnline})` : ''} |`);
     sections.push(`| 累计观看人数 | ${watcherCnt} |`);
     sections.push(`| 累计观看人次 | ${viewCnt} |`);
-    sections.push(`| 评论数 | ${commentCnt} |`);
-    sections.push(`| 评论人数 | ${commenterCnt} |`);
+    sections.push(`| 评论数(条) | ${commentCnt} |`);
+    sections.push(`| 评论人数(人) | ${commenterCnt} |`);
     sections.push(`| 互动率 | ${interactionRate}% |`);
     sections.push(`| 商品点击次数 | ${productClickCnt} |`);
     sections.push(`| 商城浏览次数 | ${mallPageViewCnt} |`);
@@ -998,9 +1013,23 @@ function buildAnalysisPrompt(
   segmentSeq: number,
   historicalContext: string = '',
   previousSessionComparison: string = '',
-  benchmarkAnchorData: string = ''
+  benchmarkAnchorData: string = '',
+  sessionStartTime: string | null = null,
 ): string {
   const typeLabel = reportType === REPORT_TYPE.FINAL ? '终场综合' : `第${segmentSeq}片段(近30分钟)`;
+
+  // 计算直播已进行时长
+  let liveDuration = '';
+  if (sessionStartTime && reportType !== REPORT_TYPE.FINAL) {
+    const start = new Date(sessionStartTime);
+    const elapsed = Date.now() - start.getTime();
+    const hours = Math.floor(elapsed / 3600000);
+    const minutes = Math.floor((elapsed % 3600000) / 60000);
+    liveDuration = `，直播已进行约${hours}小时${minutes}分钟`;
+  }
+  const segmentContext = reportType === REPORT_TYPE.FINAL
+    ? '终场综合分析（整场直播）'
+    : `这是本场直播的第${segmentSeq}个30分钟片段${liveDuration}。${segmentSeq === 1 ? '这是直播开场阶段。' : segmentSeq === 2 ? '这是直播前中期阶段。' : segmentSeq <= 4 ? '这是直播中段阶段，主播已进入核心内容。' : '这是直播后期阶段，主播应已进入深度内容和促单环节。'}请不要将非第1片段标注为"开场暖场"。`;
 
   // For segment analysis: determine the time window
   const promptSnap = snapshotData[snapshotData.length - 1];
@@ -1018,12 +1047,12 @@ function buildAnalysisPrompt(
   }
 
   // Build analysis instruction (concise, without full data)
-  const dataMarkdown = buildAnalysisDataMarkdown(snapshotData, reportType, segmentSeq);
+  const dataMarkdown = buildAnalysisDataMarkdown(snapshotData, reportType, segmentSeq, sessionStartTime);
 
   // Build concise summary for the system prompt (reuse lastSnap from above)
   const rawJson = (promptSnap?.rawJson ?? promptSnap?.raw_json) as Record<string, unknown> | null;
   const analysis = (rawJson?.analysis as Record<string, unknown>) || {};
-  const summaryLine = `在线${analysis.peakConcurrentViewers || 'N/A'} | 观看${analysis.watcherCnt || 'N/A'} | 评论${analysis.commentCnt || 'N/A'} | 成交¥${analysis.transactionAmount || 'N/A'}`;
+  const summaryLine = `在线${analysis.peakConcurrentViewers || 'N/A'} | 观看${analysis.watcherCnt || 'N/A'} | 评论数${analysis.commentCnt || 'N/A'}条/评论人数${analysis.commenterCnt || 'N/A'}人 | 成交¥${analysis.transactionAmount || 'N/A'}`;
 
   return `${skillContent}
 
@@ -1032,6 +1061,8 @@ function buildAnalysisPrompt(
 ## 当前分析任务
 
 请对以下直播数据进行**${typeLabel}分析**。完整数据见附件。
+
+**片段上下文**: ${segmentContext}
 
 **关键指标速览**: ${summaryLine}
 
@@ -1053,7 +1084,9 @@ ${dataMarkdown}
 特别注意：
 - **这是私域直播**：没有算法推流、没有自然流量推荐，观众来自私域社群（微信群/朋友圈/粉丝群），不要用公域流量标准来评判
 - **这是私密产品直播**：两性健康/私护品类，决策链长、隐私性高，成交转化率天然低于快消品
-- **识别直播阶段结构**：开场暖场→情感痛点→心理理论→实操演示→产品植入→互动促单→收尾，标注每阶段的起止时间和数据变化
+- **区分评论数和评论人数**：评论数(commentCnt)是评论总条数，评论人数(commenterCnt)是发言人数，评论数一定≥评论人数，不要混淆
+- **根据片段序号判断直播阶段**：第1片段才是开场，第2+片段已进入核心内容，第4+片段应进入促单阶段，不要把中后期片段误判为"开场暖场"
+- **识别直播阶段结构**：根据片段序号判断当前处于开场暖场→情感痛点→心理理论→实操演示→产品植入→互动促单→收尾中的哪个阶段
 - **话术策略识别**：痛点共情话术（"他是不是不主动了"）→ 心理解读（"男人追求征服感"）→ 技巧教学（"三步拿回主动权"）→ 产品衔接（"用这个效果更好"），分析每种话术对数据的拉动效果
 - **教学→产品衔接分析**：主播如何从心理课/实操课自然过渡到产品推荐，衔接是否流畅
 - 评论时间精确到分秒，定位互动爆发的具体时间点，关联对应话术
@@ -1883,7 +1916,7 @@ async function _runAnalysisImpl(
   // DbQueryBuilder 自动将 snake_case 转为 camelCase
   const { data: sessionInfo } = await client
     .from('live_sessions')
-    .select('room_name, anchor_name, room_type, template_name')
+    .select('room_name, anchor_name, room_type, template_name, start_time')
     .eq('id', sessionId)
     .maybeSingle();
 
@@ -1975,11 +2008,14 @@ async function _runAnalysisImpl(
     ]);
   }
 
+  const sessionStartTime = sessionInfo?.startTime ?? sessionInfo?.start_time ?? null;
+
   // 构建完整数据 Markdown（不截断，作为附件发送给 AI）
   const dataMarkdown = buildAnalysisDataMarkdown(
     analysisSnapshots.length > 0 ? analysisSnapshots : snapshots,
     reportType,
-    segmentSeq
+    segmentSeq,
+    sessionStartTime
   );
 
   // 构建分析指令 Prompt（不含完整数据）
@@ -1990,7 +2026,8 @@ async function _runAnalysisImpl(
     segmentSeq,
     historicalContext,
     previousSessionComparison,
-    benchmarkAnchorData
+    benchmarkAnchorData,
+    sessionStartTime
   );
 
   // 合并为完整 prompt：指令 + 完整数据附件
