@@ -1,21 +1,33 @@
 /**
  * 服务端日志工具 - 同时输出到 console 和日志文件
  * 
- * 日志目录优先级:
- * 1. /app/work/logs/bypass (开发环境)
- * 2. /tmp/live-analysis-logs (生产环境回退)
+ * 日志目录策略:
+ * - PROD 环境: 直接用 /tmp/live-analysis-logs
+ * - DEV 环境: 优先 /app/work/logs/bypass，不可写则回退 /tmp
  * 格式: JSON (与 coze pino logger 格式一致)
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 
-// 动态确定日志目录：优先用 /app，不可写则回退到 /tmp
+const IS_PROD = process.env.COZE_PROJECT_ENV === 'PROD';
+
 function resolveLogDir(): string {
+  // 生产环境直接用 /tmp，避免任何 /app 权限问题
+  if (IS_PROD) {
+    const dir = '/tmp/live-analysis-logs';
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    } catch {
+      return '/tmp';
+    }
+  }
+  
+  // 开发环境尝试 /app
   const preferredDir = '/app/work/logs/bypass';
   try {
     fs.mkdirSync(preferredDir, { recursive: true });
-    // 测试是否可写
     const testFile = path.join(preferredDir, '.write_test');
     fs.writeFileSync(testFile, 'test');
     fs.unlinkSync(testFile);
