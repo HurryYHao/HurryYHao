@@ -226,9 +226,13 @@ async function getPreviousSessionComparison(
     prevAnalysisSummary = `\n\n上一场分析报告摘要:\n${text.slice(0, 1500)}${text.length > 1500 ? '...(已截断)' : ''}`;
   }
 
+  const psRoomName = prevSession.roomName ?? prevSession.room_name ?? '';
+  const psStartTime = prevSession.startTime ?? prevSession.start_time;
+  const psEndTime = prevSession.endTime ?? prevSession.end_time;
+
   return `【与前一场对比数据】
-上一场直播: ${prevSession.room_name}
-时间: ${prevSession.start_time ? new Date(String(prevSession.start_time)).toLocaleString('zh-CN') : 'N/A'} ~ ${prevSession.end_time ? new Date(String(prevSession.end_time)).toLocaleString('zh-CN') : 'N/A'}
+上一场直播: ${psRoomName}
+时间: ${psStartTime ? new Date(String(psStartTime)).toLocaleString('zh-CN') : 'N/A'} ~ ${psEndTime ? new Date(String(psEndTime)).toLocaleString('zh-CN') : 'N/A'}
 ${prevMetrics}${prevAnalysisSummary}
 
 **请务必在分析中与前一场数据进行对比**，指出：
@@ -276,7 +280,9 @@ async function getBenchmarkAnchorData(anchorName: string): Promise<string> {
         const bAmount = Number(a.transactionAmount || o.totalAmount || 0);
         const bWatchers = Number(a.watcherCnt || 0);
         const bPerViewer = bWatchers > 0 && bAmount > 0 ? `¥${(bAmount/bWatchers).toFixed(2)}` : '-';
-        metricsList.push(`  ${session.room_name}(${new Date(String(session.start_time)).toLocaleDateString('zh-CN')}): 峰值在线${a.peakConcurrentViewers||'-'} / 场观${a.watcherCnt||'-'} / 成交¥${bAmount||'-'} / ${a.transactionCnt||o.paySuccessTotal||'-'}单 / 人均产值${bPerViewer}`);
+        const sRoomName = session.roomName ?? session.room_name ?? '';
+        const sStartTime = session.startTime ?? session.start_time ?? '';
+        metricsList.push(`  ${sRoomName}(${new Date(String(sStartTime)).toLocaleDateString('zh-CN')}): 峰值在线${a.peakConcurrentViewers||'-'} / 场观${a.watcherCnt||'-'} / 成交¥${bAmount||'-'} / ${a.transactionCnt||o.paySuccessTotal||'-'}单 / 人均产值${bPerViewer}`);
       }
     }
   }
@@ -703,13 +709,20 @@ async function getHistoricalScripts(): Promise<string> {
   if (error || !scripts || scripts.length === 0) return '';
 
   const scriptText = scripts.map((s: Record<string, unknown>) => {
-    const parts = [`场次: ${s.session_date}`];
-    if (s.anchor_name) parts.push(`主播: ${s.anchor_name}`);
-    if (s.keywords) parts.push(`关键词: ${s.keywords}`);
-    if (s.content_points) parts.push(`内容要点:\n${s.content_points}`);
-    if (s.product_list) parts.push(`产品清单:\n${s.product_list}`);
-    if (s.transaction_data) parts.push(`成交数据:\n${s.transaction_data}`);
-    if (s.replay_transaction) parts.push(`录播成交: ${s.replay_transaction}`);
+    const sd = s.sessionDate ?? s.session_date;
+    const an = s.anchorName ?? s.anchor_name;
+    const kw = s.keywords;
+    const cp = s.contentPoints ?? s.content_points;
+    const pl = s.productList ?? s.product_list;
+    const td = s.transactionData ?? s.transaction_data;
+    const rt = s.replayTransaction ?? s.replay_transaction;
+    const parts = [`场次: ${sd}`];
+    if (an) parts.push(`主播: ${an}`);
+    if (kw) parts.push(`关键词: ${kw}`);
+    if (cp) parts.push(`内容要点:\n${cp}`);
+    if (pl) parts.push(`产品清单:\n${pl}`);
+    if (td) parts.push(`成交数据:\n${td}`);
+    if (rt) parts.push(`录播成交: ${rt}`);
     return parts.join('\n');
   }).join('\n---\n');
 
@@ -774,7 +787,7 @@ function buildAnalysisPrompt(
 
   // Build comprehensive data for each snapshot
   const dataSummary = snapshotData.map((snap, idx) => {
-    const rawJson = snap.raw_json as Record<string, unknown> | null;
+    const rawJson = (snap.rawJson ?? snap.raw_json) as Record<string, unknown> | null;
     if (!rawJson) return '';
 
     const analysis = (rawJson.analysis as Record<string, unknown>) || {};
@@ -806,7 +819,7 @@ function buildAnalysisPrompt(
     const displayOnline = reportType === REPORT_TYPE.FINAL ? onlineCount : avgOnline;
 
     return `
---- 片段 ${idx + 1} (快照时间: ${snap.snapshot_time}) ---
+--- 片段 ${idx + 1} (快照时间: ${snap.snapshotTime ?? snap.snapshot_time}) ---
 
 【核心指标】
 当前/峰值在线人数: ${displayOnline}${reportType !== REPORT_TYPE.FINAL ? ` (平均${avgOnline})` : ''}
@@ -1303,7 +1316,7 @@ function extractKnowledgeFromAnalysis(
   const source = `session_${sessionId}`;
 
   for (const snap of snapshotData) {
-    const rawJson = snap.raw_json as Record<string, unknown> | null;
+    const rawJson = (snap.rawJson ?? snap.raw_json) as Record<string, unknown> | null;
     if (!rawJson) continue;
 
     const analysis = (rawJson.analysis as Record<string, unknown>) || {};
@@ -1665,15 +1678,24 @@ export async function runAnalysis(
   const client = getSupabaseClient();
 
   // 获取会话信息（含主播名称和模板名称）
+  // DbQueryBuilder 自动将 snake_case 转为 camelCase
   const { data: sessionInfo } = await client
     .from('live_sessions')
     .select('room_name, anchor_name, room_type, template_name')
     .eq('id', sessionId)
     .maybeSingle();
 
+  // camelCase 快捷访问（DbQueryBuilder 返回 camelCase 字段名）
+  const si: { roomName: string; anchorName: string; roomType: string; templateName: string } = {
+    roomName: String((sessionInfo as Record<string, unknown>)?.roomName ?? (sessionInfo as Record<string, unknown>)?.room_name ?? ''),
+    anchorName: String((sessionInfo as Record<string, unknown>)?.anchorName ?? (sessionInfo as Record<string, unknown>)?.anchor_name ?? ''),
+    roomType: String((sessionInfo as Record<string, unknown>)?.roomType ?? (sessionInfo as Record<string, unknown>)?.room_type ?? ''),
+    templateName: String((sessionInfo as Record<string, unknown>)?.templateName ?? (sessionInfo as Record<string, unknown>)?.template_name ?? ''),
+  };
+
   // 如果是智能直播且有模板名称，检查是否已有相同模板的终场分析
-  const templateName = sessionInfo?.template_name;
-  const isIntelligentLive = sessionInfo?.room_type === 'intelligence' && templateName;
+  const templateName = si.templateName;
+  const isIntelligentLive = si.roomType === 'intelligence' && templateName;
   
   if (isIntelligentLive && reportType === REPORT_TYPE.FINAL) {
     // 查找相同模板名称的已完成终场分析
@@ -1696,10 +1718,10 @@ export async function runAnalysis(
     // 这里我们可以添加逻辑来避免重复，但先保留分析功能
   }
 
-  const anchorName = sessionInfo?.anchor_name || (sessionInfo?.room_name ? resolveAnchorName(sessionInfo.room_name) : '未知主播');
+  const anchorName = si.anchorName || (si.roomName ? resolveAnchorName(si.roomName) : '未知主播');
 
   // 更新 anchor_name（如果还没有的话）
-  if (sessionInfo && !sessionInfo.anchor_name) {
+  if (sessionInfo && !si.anchorName) {
     await client.from('live_sessions').update({ anchor_name: anchorName }).eq('id', sessionId);
   }
 
@@ -1793,7 +1815,7 @@ export async function runAnalysis(
       model_used: 'doubao-seed-2-0-pro-260215',
       anchor_name: anchorName,
       template_name: templateName,
-      room_type: sessionInfo?.room_type,
+      room_type: si.roomType,
       overall_score: scores.overall || null,
       anchor_score: scores.anchor || null,
       interaction_score: scores.interaction || null,
@@ -1954,10 +1976,17 @@ export async function* streamAnalysis(
     .eq('id', sessionId)
     .maybeSingle();
 
-  const anchorName = sessionInfo?.anchor_name || (sessionInfo?.room_name ? resolveAnchorName(sessionInfo.room_name) : '未知主播');
+  const si2: { roomName: string; anchorName: string; roomType: string; templateName: string } = {
+    roomName: String((sessionInfo as Record<string, unknown>)?.roomName ?? (sessionInfo as Record<string, unknown>)?.room_name ?? ''),
+    anchorName: String((sessionInfo as Record<string, unknown>)?.anchorName ?? (sessionInfo as Record<string, unknown>)?.anchor_name ?? ''),
+    roomType: String((sessionInfo as Record<string, unknown>)?.roomType ?? (sessionInfo as Record<string, unknown>)?.room_type ?? ''),
+    templateName: String((sessionInfo as Record<string, unknown>)?.templateName ?? (sessionInfo as Record<string, unknown>)?.template_name ?? ''),
+  };
+
+  const anchorName = si2.anchorName || (si2.roomName ? resolveAnchorName(si2.roomName) : '未知主播');
 
   // 更新 anchor_name（如果还没有的话）
-  if (sessionInfo && !sessionInfo.anchor_name) {
+  if (sessionInfo && !si2.anchorName) {
     await client.from('live_sessions').update({ anchor_name: anchorName }).eq('id', sessionId);
   }
 
@@ -2047,8 +2076,8 @@ export async function* streamAnalysis(
     skill_version: skill.version,
     model_used: 'doubao-seed-2-0-pro-260215',
     anchor_name: anchorName,
-    template_name: sessionInfo?.template_name,
-    room_type: sessionInfo?.room_type,
+    template_name: si2.templateName,
+    room_type: si2.roomType,
     overall_score: scores.overall || null,
     anchor_score: scores.anchor || null,
     interaction_score: scores.interaction || null,
@@ -2126,10 +2155,17 @@ export async function runAnalysisForReplay(
     .eq('id', sessionId)
     .maybeSingle();
 
-  const anchorName = sessionInfo?.anchor_name || (sessionInfo?.room_name ? extractAnchorName(sessionInfo.room_name) : '未知主播');
+  const si3 = {
+    roomName: (sessionInfo as any)?.roomName ?? (sessionInfo as any)?.room_name ?? '',
+    anchorName: (sessionInfo as any)?.anchorName ?? (sessionInfo as any)?.anchor_name ?? '',
+    startTime: (sessionInfo as any)?.startTime ?? (sessionInfo as any)?.start_time ?? '',
+    endTime: (sessionInfo as any)?.endTime ?? (sessionInfo as any)?.end_time ?? '',
+  };
+
+  const anchorName = si3.anchorName || (si3.roomName ? extractAnchorName(si3.roomName) : '未知主播');
 
   // 更新 anchor_name（如果还没有的话）
-  if (sessionInfo && !sessionInfo.anchor_name) {
+  if (sessionInfo && !si3.anchorName) {
     await client.from('live_sessions').update({ anchor_name: anchorName }).eq('id', sessionId);
   }
 
@@ -2150,8 +2186,8 @@ export async function runAnalysisForReplay(
     skill.content,
     snapshots,
     anchorName,
-    sessionInfo?.start_time,
-    sessionInfo?.end_time
+    si3.startTime,
+    si3.endTime
   );
 
   // 调用 LLM 分析
@@ -2254,7 +2290,7 @@ function buildReplayAnalysisPrompt(
 ): string {
   // 构建完整数据
   const dataSummary = snapshotData.map((snap, idx) => {
-    const rawJson = snap.raw_json as Record<string, unknown> | null;
+    const rawJson = (snap.rawJson ?? snap.raw_json) as Record<string, unknown> | null;
     if (!rawJson) return '';
 
     const analysis = (rawJson.analysis as Record<string, unknown>) || {};
@@ -2343,7 +2379,7 @@ function extractGoodsNamesFromSnapshots(snapshots: Record<string, unknown>[]): s
   const goodsNames = new Set<string>();
   
   for (const snap of snapshots) {
-    const rawJson = snap.raw_json as Record<string, unknown> | null;
+    const rawJson = (snap.rawJson ?? snap.raw_json) as Record<string, unknown> | null;
     if (!rawJson) continue;
     
     const orderDetails = rawJson.orderDetails as Record<string, unknown>[] | null;
