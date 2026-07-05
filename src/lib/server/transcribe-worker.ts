@@ -23,7 +23,7 @@ export async function transcribeAudio(audioPath: string, sessionId: number, segm
   }
 
   // 使用我们的 ASR 客户端
-  const text = await asrClient.transcribe(audioPath, 'zh');
+  const text = await asrClient.transcribe(audioPath);
 
   console.log(`[TranscribeWorker] ASR 转写成功: ${text.length} 字符`);
 

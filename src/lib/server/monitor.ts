@@ -5,9 +5,11 @@ import { ensureKnowledgeSeeded } from './knowledge-seed';
 import { CONFIG, LIVE_STATUS, SESSION_STATUS } from './config';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { fetchAllSnapshotData, getSessionSnapshots, fetchAnalysis, fetchChartData, fetchNewoldData } from './fetcher';
-import { runAnalysis, extractAnchorName, analyzeProduct } from './analyzer';
+import { runAnalysis, extractAnchorName, analyzeProduct, upsertAnchorProfile } from './analyzer';
 import { autoStartRecording, stopAudioRecording, isRecording, canAutoRestart, isStreamDead, resetRetryCount } from './recorder';
+import { transcribeAudio } from './transcribe-worker';
 import { globalQueue } from '@/worker/queue';
+import { sendWeComAlertsBatch } from './wecom-notify';
 
 // ==================== 类型定义 ====================
 
@@ -378,6 +380,15 @@ async function startSession(room: LiveRoom): Promise<number> {
     console.error(`[Monitor] 自动录制异常:`, err instanceof Error ? err.message : err);
   });
 
+  // 企业微信通知：开播提醒
+  sendWeComAlertsBatch([{
+    title: `[${room.roomName || room.roomId}] 直播已开播`,
+    description: `系统已自动开始录制和数据监控，将在30分钟后进行首次分析。`,
+    severity: 'low',
+  }]).catch(err => {
+    console.error('[startSession] 企微通知失败:', err instanceof Error ? err.message : err);
+  });
+
   return sessionId;
 }
 
@@ -387,6 +398,13 @@ async function startSession(room: LiveRoom): Promise<number> {
 async function endSession(sessionId: number, roomId: string): Promise<void> {
   const client = getSupabaseClient();
 
+  // 获取会话信息
+  const { data: session } = await client
+    .from('live_sessions')
+    .select('*')
+    .eq('id', sessionId)
+    .single();
+
   // 先停止音频录制
   if (isRecording(roomId)) {
     console.log(`[Monitor] 直播结束，停止录制: room=${roomId}`);
@@ -394,6 +412,30 @@ async function endSession(sessionId: number, roomId: string): Promise<void> {
   }
   // 重置重试计数，防止后续误判
   resetRetryCount(roomId);
+
+  // 转写最后一段录制的音频（等待完成后再分析）
+  const lastSegmentSeq = Number(getField(session, 'lastSnapshotSeq', 'last_snapshot_seq')) || 0;
+  if (lastSegmentSeq > 0) {
+    try {
+      console.log(`[Monitor] 终场前转写最后一段音频: session=${sessionId}, seq=${lastSegmentSeq}`);
+      const recordingSegments = await client
+        .from('recording_segments')
+        .select('*')
+        .eq('session_id', sessionId)
+        .order('segment_seq', { ascending: false })
+        .limit(1);
+      const segment = recordingSegments.data?.[0];
+      if (segment) {
+        const audioUrl = String(getField(segment, 'audioUrl', 'audio_url') || '');
+        const segmentSeq = Number(getField(segment, 'segmentSeq', 'segment_seq')) || 0;
+        if (audioUrl && segmentSeq) {
+          await transcribeAudio(audioUrl, sessionId, segmentSeq);
+        }
+      }
+    } catch (err) {
+      console.error(`[Monitor] 终场前转写最后一段音频失败:`, err instanceof Error ? err.message : err);
+    }
+  }
 
   // 更新状态为分析中
   const { error: updateError } = await client
@@ -420,6 +462,17 @@ async function endSession(sessionId: number, roomId: string): Promise<void> {
     console.error(`商品作战卡生成失败:`, err instanceof Error ? err.message : err);
   }
 
+  // 生成/更新主播画像
+  try {
+    const anchorName = String(getField(session, 'anchorName', 'anchor_name') || '');
+    if (anchorName && anchorName !== '未知主播') {
+      console.log(`[Monitor] 终场后生成主播画像: ${anchorName}`);
+      await upsertAnchorProfile(anchorName);
+    }
+  } catch (err) {
+    console.error(`主播画像生成失败:`, err instanceof Error ? err.message : err);
+  }
+
   // 更新状态为已结束
   const { error: endError } = await client
     .from('live_sessions')
@@ -427,6 +480,18 @@ async function endSession(sessionId: number, roomId: string): Promise<void> {
     .eq('id', sessionId);
 
   if (endError) throw new Error(`结束会话失败: ${endError.message}`);
+
+  // 企业微信通知：直播结束
+  const sRoomName = String(getField(session, 'roomName', 'room_name') ?? '未知直播间');
+  const sStartTime = getField(session, 'startTime', 'start_time') as string | null;
+  const durationMin = sStartTime ? Math.round((Date.now() - new Date(sStartTime).getTime()) / 60000) : 0;
+  sendWeComAlertsBatch([{
+    title: `[${sRoomName}] 直播已结束`,
+    description: `直播时长${durationMin}分钟，终场分析已完成。`,
+    severity: 'low',
+  }]).catch(err => {
+    console.error('[endSession] 企微通知失败:', err instanceof Error ? err.message : err);
+  });
 }
 
 /**
@@ -693,7 +758,35 @@ export async function runSegmentAnalysis(sessionId: number, roomId: string): Pro
   // 先抓取数据
   await fetchAllSnapshotData(sessionId, roomId, nextSeq);
 
-  // 执行分析
+  // 触发并等待音频转写（录制片段完成后转写任务已入队，
+  // 这里直接调用 transcribeAudio 确保转写在分析前完成）
+  try {
+    const { data: segments } = await client
+      .from('recording_segments')
+      .select('local_path, transcribe_status, segment_seq')
+      .eq('session_id', sessionId)
+      .eq('segment_seq', nextSeq)
+      .limit(1);
+
+    const seg = segments?.[0];
+    const segLocalPath = seg ? String(getField(seg, 'localPath', 'local_path') ?? '') : '';
+    const segTranscribeStatus = String(getField(seg, 'transcribeStatus', 'transcribe_status') ?? '');
+    
+    if (seg && segLocalPath && segTranscribeStatus !== 'success') {
+      console.log(`[SegmentAnalysis] 等待音频转写: session=${sessionId}, seg=${nextSeq}, path=${segLocalPath}`);
+      const { transcribeAudio } = await import('@/lib/server/transcribe-worker');
+      await transcribeAudio(segLocalPath, sessionId, nextSeq);
+      console.log(`[SegmentAnalysis] 转写完成，开始AI分析`);
+    } else if (segTranscribeStatus === 'success') {
+      console.log(`[SegmentAnalysis] 转写已完成，直接开始AI分析`);
+    } else {
+      console.log(`[SegmentAnalysis] 无录制片段数据，仅基于直播间数据分析`);
+    }
+  } catch (transcribeErr) {
+    console.error(`[SegmentAnalysis] 转写失败，将仅基于直播间数据分析:`, transcribeErr instanceof Error ? transcribeErr.message : transcribeErr);
+  }
+
+  // 执行分析（含转写文字+直播数据）
   await runAnalysis(sessionId, roomId, nextSeq, 'segment');
 
   // 更新片段序号和最后分析时间
@@ -1082,6 +1175,62 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
         }
       }
 
+      // ---- AI 实时分析预警 ----
+      // 每分钟将实时数据发给AI分析，检测规则引擎无法发现的异常
+      try {
+        const sRoomName = String(getField(session, 'roomName', 'room_name') ?? '未知直播间');
+        const aiPrompt = `你是一个直播数据实时监控AI。请分析以下直播间的1分钟实时数据，判断是否存在异常或需要预警的问题。
+
+直播间：${sRoomName}
+当前在线：${currentData.online}人，累计观看：${currentData.viewers}次
+评论数：${currentData.comments}条
+成交金额：¥${currentData.amount.toFixed(2)}
+新粉：${currentData.newFans}人，老粉：${currentData.oldFans}人
+
+请严格按JSON格式返回分析结果：
+{"hasAlert":false,"alerts":[]}
+或
+{"hasAlert":true,"alerts":[{"type":"ai_detected","severity":"high/medium/low","title":"预警标题","description":"详细描述"}]}
+
+注意：
+- 只在确实存在异常时才发出预警，不要过度预警
+- severity: high=严重(需立即处理), medium=中等(需关注), low=轻微(参考)
+- 常见异常：流量异常、转化异常、互动异常、内容问题等`;
+
+        const { UniversalLLMClient } = await import('./llm-client');
+        const llm = new UniversalLLMClient();
+        const aiResult = await llm.invoke(
+          [{ role: 'user', content: aiPrompt }],
+          { model: 'doubao-seed-2-0-lite-260215', temperature: 0.3 }
+        );
+
+        if (aiResult) {
+          const jsonMatch = aiResult.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]) as {
+              hasAlert: boolean;
+              alerts: Array<{ type: string; severity: string; title: string; description: string }>;
+            };
+            if (parsed.hasAlert && parsed.alerts) {
+              for (const alert of parsed.alerts) {
+                const alertKey = `ai_${alert.type}:${alert.title}`;
+                if (!recentAlertTypes.has(alertKey)) {
+                  newAlerts.push({
+                    alertType: `ai_${alert.type}`,
+                    severity: (['high', 'medium', 'low'].includes(alert.severity) ? alert.severity : 'medium') as 'high' | 'medium' | 'low',
+                    title: alert.title,
+                    description: alert.description,
+                  });
+                }
+              }
+            }
+          }
+        }
+      } catch (aiErr) {
+        // AI分析失败不影响规则引擎预警
+        console.error(`[RealtimeAlert] AI分析失败(session=${sessionId}):`, aiErr instanceof Error ? aiErr.message : aiErr);
+      }
+
       // 保存新预警到数据库
       const startTime = sStartTime ? new Date(sStartTime).getTime() : now;
       const offsetMinutes = Math.round((now - startTime) / 60000);
@@ -1114,6 +1263,19 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
         }
 
         triggered.push({ sessionId, alertCount: newAlerts.length });
+
+        // 企业微信通知
+        if (newAlerts.length > 0) {
+          const sRoomName = String(getField(session, 'roomName', 'room_name') ?? '未知直播间');
+          const wecomAlerts = newAlerts.map(a => ({
+            title: `[${sRoomName}] ${a.title}`,
+            description: a.description,
+            severity: a.severity,
+          }));
+          sendWeComAlertsBatch(wecomAlerts).catch(err => {
+            console.error('[RealtimeAlert] 企微通知发送失败:', err instanceof Error ? err.message : err);
+          });
+        }
       }
 
       // 同时记录分钟级metrics

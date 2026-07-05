@@ -78,7 +78,7 @@ export async function POST(request: NextRequest) {
     console.log(`[ASR] 读取本地文件: ${localFilePath} (${fileSizeMB}MB)`);
 
     // 使用我们的 ASR 客户端
-    const text = await asrClient.transcribe(localFilePath, 'zh');
+    const text = await asrClient.transcribe(localFilePath);
 
     console.log(`[ASR] 转写完成: ${text.length} 字符`);
 

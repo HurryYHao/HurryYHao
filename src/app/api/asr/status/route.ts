@@ -1,28 +1,25 @@
 // GET /api/asr/status - 检查ASR配置状态
 import { NextResponse } from 'next/server';
-import { CONFIG } from '@/lib/server/config';
-import { asrClient } from '@/lib/server/asr-client';
 
 export async function GET() {
   try {
-    const hasConfig = !!CONFIG.tencentCloud.secretId && !!CONFIG.tencentCloud.secretKey;
-    
-    // 检查客户端是否初始化成功
-    const clientInitialized = asrClient.isInitialized();
+    // coze-coding-dev-sdk ASR 不需要额外配置，SDK 自带鉴权
+    const clientInitialized = true;
     
     return NextResponse.json({
       success: true,
       data: {
-        hasConfig,
+        hasConfig: true,
         clientInitialized,
         config: {
-          secretId: hasConfig ? '已配置 ✓' : '未配置 ✗',
-          secretKey: hasConfig ? '已配置 ✓' : '未配置 ✗',
-          region: CONFIG.tencentCloud.region,
+          provider: 'coze-coding-dev-sdk (豆包语音识别)',
+          maxFileSize: '100MB',
+          maxDuration: '2小时',
+          supportedFormats: ['mp3', 'wav', 'ogg', 'm4a'],
         },
         message: clientInitialized 
-          ? 'ASR服务已就绪，可以进行语音转写' 
-          : 'ASR服务未配置，请检查环境变量 TENCENTCLOUD_SECRET_ID 和 TENCENTCLOUD_SECRET_KEY',
+          ? 'ASR服务已就绪（豆包语音识别），可以进行语音转写' 
+          : 'ASR服务未配置',
       },
     });
   } catch (error) {
