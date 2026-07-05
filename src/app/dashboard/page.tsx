@@ -235,8 +235,39 @@ export default function DashboardPage() {
                           <Badge variant="secondary" className="text-[10px]">智能</Badge>
                         )}
                       </div>
-                      {/* 实时数据条 */}
-                      {room.liveData ? (
+                      {/* 录制详情（合并自原"正在录制"区域） */}
+                      {isRecording && (() => {
+                        const rs = recordingStatus.find(r => r.roomId === room.roomId);
+                        if (!rs) return null;
+                        return (
+                          <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+                            <span className="flex items-center gap-1">
+                              <Clock className="h-3 w-3" />
+                              录制 {formatDuration(rs.recordingDuration)}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Camera className="h-3 w-3" />
+                              第{rs.lastSnapshotSeq}段
+                            </span>
+                            {rs.nextAnalysisIn != null && (
+                              <span className="flex items-center gap-1 text-amber-600">
+                                <Timer className="h-3 w-3" />
+                                {rs.nextAnalysisIn}分钟后分析
+                              </span>
+                            )}
+                            {rs.isAnalyzing && (
+                              <Badge className="text-[10px] bg-amber-500/20 text-amber-600 border-amber-500/30">
+                                <BrainCircuit className="h-3 w-3 mr-0.5" />分析中
+                              </Badge>
+                            )}
+                            <Badge variant="outline" className="text-[10px] border-primary/30 text-primary ml-auto">
+                              每30分钟自动分析
+                            </Badge>
+                          </div>
+                        );
+                      })()}
+                      {/* 无录制状态时显示实时数据 */}
+                      {!isRecording && room.liveData ? (
                         <div className="flex items-center gap-4 mt-1.5 text-xs">
                           <span className="flex items-center gap-1 text-primary font-mono">
                             <Users className="h-3 w-3" />{formatNum(room.liveData.onlineCount)}在线
@@ -253,7 +284,7 @@ export default function DashboardPage() {
                             </span>
                           )}
                         </div>
-                      ) : (
+                      ) : !isRecording && (
                         <p className="text-xs text-muted-foreground mt-1">数据获取中...</p>
                       )}
                     </div>
@@ -267,72 +298,6 @@ export default function DashboardPage() {
                   </div>
                 );
               })}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ===== 录制中的直播 ===== */}
-      {recordingStatus.length > 0 && (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base flex items-center gap-2">
-                <div className="relative">
-                  <CircleDot className="h-5 w-5 text-red-500" />
-                  <div className="absolute inset-0 h-5 w-5 animate-ping">
-                    <CircleDot className="h-5 w-5 text-red-500 opacity-75" />
-                  </div>
-                </div>
-                正在录制
-              </CardTitle>
-              <Badge variant="outline" className="border-primary/30 text-primary">
-                每30分钟自动分析
-              </Badge>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {recordingStatus.map(rs => (
-                <div key={rs.sessionId} className="flex items-center gap-4 p-3 rounded-lg border border-border bg-muted/30">
-                  <div className="relative flex-shrink-0">
-                    <div className="h-3 w-3 rounded-full bg-red-500" />
-                    <div className="absolute inset-0 h-3 w-3 rounded-full bg-red-500 animate-ping opacity-75" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="font-medium text-sm truncate">{rs.roomName || `房间 ${rs.roomId}`}</p>
-                      {rs.isAnalyzing && (
-                        <Badge className="text-[10px] bg-amber-500/20 text-amber-600 border-amber-500/30">
-                          <BrainCircuit className="h-3 w-3 mr-0.5" />分析中
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <Clock className="h-3 w-3" />
-                        录制 {formatDuration(rs.recordingDuration)}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Camera className="h-3 w-3" />
-                        第{rs.lastSnapshotSeq}段
-                      </span>
-                      {rs.nextAnalysisIn != null && (
-                        <span className="flex items-center gap-1 text-amber-600">
-                          <Timer className="h-3 w-3" />
-                          {rs.nextAnalysisIn}分钟后分析
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <Link href={`/dashboard/live?roomId=${rs.roomId}`}>
-                    <Button variant="outline" size="sm" className="h-7 text-xs">
-                      <BarChart3 className="h-3 w-3 mr-1" />
-                      数据大盘
-                    </Button>
-                  </Link>
-                </div>
-              ))}
             </div>
           </CardContent>
         </Card>
