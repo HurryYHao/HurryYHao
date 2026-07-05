@@ -90,10 +90,28 @@ function toCamelCase(str: string): string {
   return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 }
 
+/**
+ * PostgreSQL numeric/decimal 类型通过 pg 库返回字符串，
+ * 但前端期望数字。此函数自动将纯数字字符串转为 number。
+ * 只转换看起来是数字的字符串（含小数点、负号），跳过日期/时间/ID 等字段。
+ */
+const NUMERIC_STRING_FIELDS = new Set([
+  'overall_score', 'anchor_score', 'interaction_score', 'conversion_score',
+  'sentiment_score', 'rhythm_score', 'confidence', 'amount', 'paid_amount',
+  'order_amount', 'success_rate', 'avg_conversion_rate', 'avg_comment_rate',
+  'avg_online', 'avg_viewers', 'avg_sales', 'latitude', 'longitude',
+]);
+
 function convertRowToCamel(row: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(row)) {
-    result[toCamelCase(key)] = value;
+    let converted = value;
+    // 自动将 numeric 字符串转为数字
+    if (typeof value === 'string' && NUMERIC_STRING_FIELDS.has(key)) {
+      const num = Number(value);
+      if (!isNaN(num)) converted = num;
+    }
+    result[toCamelCase(key)] = converted;
   }
   return result;
 }

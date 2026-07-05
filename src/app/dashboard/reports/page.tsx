@@ -22,8 +22,8 @@ interface Report {
   id: number; sessionId: number; reportType: string; segmentSeq: number | null;
   analysisText: string | null; skillVersion: string | null; createdAt: string;
   anchorName: string | null; templateName: string | null; roomType: string | null;
-  overallScore?: number; anchorScore?: number; interactionScore?: number;
-  conversionScore?: number; sentimentScore?: number; rhythmScore?: number;
+  overallScore?: number | string; anchorScore?: number | string; interactionScore?: number | string;
+  conversionScore?: number | string; sentimentScore?: number | string; rhythmScore?: number | string;
 }
 
 const DIMENSIONS = [
@@ -274,7 +274,7 @@ export default function ReportsPage() {
                             {report.overallScore && (
                               <Badge variant="outline" className="text-xs font-bold">
                                 <Star className="h-3 w-3 mr-1 text-primary" />
-                                {report.overallScore.toFixed(1)}
+                                {Number(report.overallScore || 0).toFixed(1)}
                               </Badge>
                             )}
                             <span className="text-xs text-muted-foreground">v{report.skillVersion || '?'}</span>
@@ -290,7 +290,7 @@ export default function ReportsPage() {
                               { key: 'sentimentScore', label: '舆情', color: 'var(--chart-4)' },
                               { key: 'rhythmScore', label: '节奏', color: 'var(--chart-5)' },
                             ].map(dim => {
-                              const score = report[dim.key as keyof Report] as number;
+                              const score = Number(report[dim.key as keyof Report]) || 0;
                               return score ? (
                                 <div key={dim.key} className="flex-1">
                                   <div className="h-1.5 bg-muted rounded-full overflow-hidden">
