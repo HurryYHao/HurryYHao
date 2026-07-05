@@ -1,5 +1,6 @@
 // POST /api/reports/reanalyze - 重新分析报告
-// 接受单个 reportId 或 reportIds 数组，重新发送数据给AI生成新报告
+// 从数据库读取已有的快照数据，重新构建prompt发给AI生成新报告
+// 不重新调用鑫云API抓数据，只是把第一次分析用的数据重新发给AI
 import { NextRequest, NextResponse } from 'next/server';
 import { runAnalysis } from '@/lib/server/analyzer';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
@@ -21,7 +22,7 @@ export async function POST(request: NextRequest) {
 
     for (const id of ids) {
       try {
-        // 从现有报告获取 sessionId、reportType、segmentSeq
+        // 1. 从现有报告获取 sessionId、reportType、segmentSeq
         const { data: report, error: reportError } = await client
           .from('analysis_reports')
           .select('id, session_id, report_type, segment_seq')
@@ -38,28 +39,16 @@ export async function POST(request: NextRequest) {
         const reportType = report.reportType as 'segment' | 'final';
         const segmentSeq = (report.segmentSeq as number) || 0;
 
-        // 从 live_sessions 获取 roomId
-        const { data: session, error: sessionError } = await client
-          .from('live_sessions')
-          .select('room_id')
-          .eq('id', sessionId)
-          .maybeSingle();
+        // 2. 重新调用分析（runAnalysis 内部从DB读取快照数据，不调鑫云API）
+        //    roomId 仅用于日志，传空字符串即可
+        const newReportId = await runAnalysis(sessionId, '', segmentSeq, reportType);
 
-        if (sessionError || !session) {
-          errors.push({ id, error: '会话不存在' });
-          continue;
-        }
-
-        const roomId = session.roomId as string;
-
-        // 删除旧报告
+        // 3. 新报告生成成功后，删除旧报告
         await client
           .from('analysis_reports')
           .delete()
           .eq('id', id);
 
-        // 重新分析
-        const newReportId = await runAnalysis(sessionId, roomId, segmentSeq, reportType);
         results.push({ id, newReportId, status: 'success' });
       } catch (err) {
         const message = err instanceof Error ? err.message : '重新分析失败';
