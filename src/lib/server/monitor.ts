@@ -39,6 +39,19 @@ interface FindPageResult {
 
 /** 正在运行的分析任务（防止重复触发） */
 const runningAnalyses = new Set<number>();
+// 内存锁：防止并发请求为同一房间重复创建会话
+const sessionCreationLocks = new Set<string>();
+// 防抖：避免频繁调用 pollLiveStatus
+
+/**
+ * 从 DbQueryBuilder 返回的对象中安全读取字段（兼容 camelCase 和 snake_case）
+ * DbQueryBuilder 自动将 snake_case 转为 camelCase，但旧代码可能使用 snake_case
+ */
+function getField<T = unknown>(obj: Record<string, unknown>, camelKey: string, snakeKey?: string): T {
+  return (obj[camelKey] ?? (snakeKey ? obj[snakeKey] : undefined)) as T;
+}
+let lastPollTime = 0;
+const MIN_POLL_INTERVAL = 10_000; // 10秒内不重复调用
 
 // 缓存智能模板名称，避免重复请求
 const templateNameCache = new Map<string, string>();
@@ -232,6 +245,15 @@ export async function pollLiveStatus(): Promise<{
   endedRooms: string[];
   rooms: LiveRoom[];
 }> {
+  // 防抖：10秒内不重复调用
+  const now = Date.now();
+  if (now - lastPollTime < MIN_POLL_INTERVAL) {
+    console.log('[Monitor] pollLiveStatus 防抖跳过，距上次调用不足10秒');
+    const { rooms: currentRooms } = await getLiveList(1, 100);
+    return { newLiveRooms: [], endedRooms: [], rooms: currentRooms };
+  }
+  lastPollTime = now;
+
   const client = getSupabaseClient();
   const newLiveRooms: string[] = [];
   const endedRooms: string[] = [];
@@ -248,16 +270,21 @@ export async function pollLiveStatus(): Promise<{
   if (error) throw new Error(`查询活跃会话失败: ${error.message}`);
 
   const activeSessionMap = new Map<string, { id: number; room_id: string; status: string }>(
-    (activeSessions || []).map((s: any) => [s.room_id, s])
+    (activeSessions || []).map((s: any) => [s.roomId ?? s.room_id, s])
   );
 
   // 检测开播
   for (const room of rooms) {
     if (room.liveStatus === LIVE_STATUS.STARTING) {
-      if (!activeSessionMap.has(room.roomId)) {
-        // 新开播 - 创建会话
-        await startSession(room);
-        newLiveRooms.push(room.roomId);
+      if (!activeSessionMap.has(room.roomId) && !sessionCreationLocks.has(room.roomId)) {
+        // 加锁防止并发创建
+        sessionCreationLocks.add(room.roomId);
+        try {
+          await startSession(room);
+          newLiveRooms.push(room.roomId);
+        } finally {
+          sessionCreationLocks.delete(room.roomId);
+        }
       }
     }
   }
@@ -269,7 +296,7 @@ export async function pollLiveStatus(): Promise<{
     );
 
     if (!roomStillLive && session.status !== SESSION_STATUS.ENDED) {
-      await endSession(session.id, roomId);
+      await endSession(Number(getField(session, 'id')), roomId);
       endedRooms.push(roomId);
     }
   }
@@ -661,7 +688,7 @@ export async function runSegmentAnalysis(sessionId: number, roomId: string): Pro
 
   if (error || !session) throw new Error('会话不存在');
 
-  const nextSeq = (session.last_snapshot_seq || 0) + 1;
+  const nextSeq = (Number(getField(session, 'lastSnapshotSeq', 'last_snapshot_seq')) || 0) + 1;
 
   // 先抓取数据
   await fetchAllSnapshotData(sessionId, roomId, nextSeq);
@@ -724,21 +751,27 @@ export async function checkAndRunScheduledAnalysis(): Promise<Array<{
   const liveRoomIds = new Set(liveRooms.map(r => r.roomId));
 
   for (const session of recordingSessions) {
+    const sessionId = Number(getField(session, 'id'));
+    const sRoomId = String(getField(session, 'roomId', 'room_id'));
+    const sRoomName = String(getField(session, 'roomName', 'room_name') ?? '');
+    const sLastAnalysisTime = getField<string | null>(session, 'lastAnalysisTime', 'last_analysis_time');
+    const sLastSnapshotSeq = Number(getField(session, 'lastSnapshotSeq', 'last_snapshot_seq') ?? 0);
+
     // 验证直播间是否还在开播状态（如果成功获取到了直播列表）
-    if (liveRoomIds.size > 0 && !liveRoomIds.has(session.room_id)) {
-      console.log(`[AutoRecording] 检测到直播间 ${session.room_id} 已不再开播状态，自动结束会话`);
-      resetRetryCount(session.room_id);
-      await endSession(session.id, session.room_id).catch(err => {
+    if (liveRoomIds.size > 0 && !liveRoomIds.has(sRoomId)) {
+      console.log(`[AutoRecording] 检测到直播间 ${sRoomId} 已不再开播状态，自动结束会话`);
+      resetRetryCount(sRoomId);
+      await endSession(sessionId, sRoomId).catch(err => {
         console.error(`[AutoRecording] 自动结束会话失败:`, err instanceof Error ? err.message : err);
       });
       continue;
     }
 
     // 检查流是否已失效（连续多次录制失败→直播实际已结束但API延迟更新）
-    if (isStreamDead(session.room_id)) {
-      console.warn(`[AutoRecording] 流已失效(连续${3}次录制失败)，自动结束会话: room=${session.room_id}, sessionId=${session.id}`);
-      resetRetryCount(session.room_id);
-      await endSession(session.id, session.room_id).catch(err => {
+    if (isStreamDead(sRoomId)) {
+      console.warn(`[AutoRecording] 流已失效(连续${3}次录制失败)，自动结束会话: room=${sRoomId}, sessionId=${sessionId}`);
+      resetRetryCount(sRoomId);
+      await endSession(sessionId, sRoomId).catch(err => {
         console.error(`[AutoRecording] 自动结束会话失败:`, err instanceof Error ? err.message : err);
       });
       continue; // 跳过后续处理
@@ -746,18 +779,18 @@ export async function checkAndRunScheduledAnalysis(): Promise<Array<{
 
     // 确保录制正在进行（防止录制进程意外中断）
     // 但如果重试次数已耗尽（直播已结束/流不可用），则不再重启
-    if (!isRecording(session.room_id) && canAutoRestart(session.room_id)) {
-      console.log(`[AutoRecording] 检测到录制中断，重新启动: room=${session.room_id}`);
-      autoStartRecording(session.room_id, session.id, session.room_name || '').catch(err => {
+    if (!isRecording(sRoomId) && canAutoRestart(sRoomId)) {
+      console.log(`[AutoRecording] 检测到录制中断，重新启动: room=${sRoomId}`);
+      autoStartRecording(sRoomId, sessionId, sRoomName).catch(err => {
         console.error(`[AutoRecording] 重新启动失败:`, err instanceof Error ? err.message : err);
       });
     }
 
     // 跳过正在运行的分析
-    if (runningAnalyses.has(session.id)) continue;
+    if (runningAnalyses.has(sessionId)) continue;
 
-    const lastAnalysis = session.last_analysis_time
-      ? new Date(session.last_analysis_time).getTime()
+    const lastAnalysis = sLastAnalysisTime
+      ? new Date(sLastAnalysisTime).getTime()
       : 0;
 
     // 如果从未分析过，用 start_time 计算
@@ -766,26 +799,23 @@ export async function checkAndRunScheduledAnalysis(): Promise<Array<{
       const { data: s } = await client
         .from('live_sessions')
         .select('start_time')
-        .eq('id', session.id)
+        .eq('id', sessionId)
         .maybeSingle();
-      referenceTime = s?.start_time ? new Date(s.start_time).getTime() : 0;
+      referenceTime = s ? new Date(String(getField(s, 'startTime', 'start_time'))).getTime() : 0;
     }
 
     const elapsed = now - referenceTime;
 
     if (elapsed >= intervalMs) {
       // 标记为正在运行，防止重复触发
-      runningAnalyses.add(session.id);
+      runningAnalyses.add(sessionId);
 
-      // 异步执行，不阻塞当前请求
-      const sessionId = session.id;
-      const roomId = session.room_id;
-      const nextSeq = (session.last_snapshot_seq || 0) + 1;
+      const nextSeq = sLastSnapshotSeq + 1;
 
-      console.log(`[AutoAnalysis] 触发片段分析: session=${sessionId}, room=${roomId}, seq=${nextSeq}, 距上次分析=${Math.round(elapsed / 60000)}分钟`);
+      console.log(`[AutoAnalysis] 触发片段分析: session=${sessionId}, room=${sRoomId}, seq=${nextSeq}, 距上次分析=${Math.round(elapsed / 60000)}分钟`);
 
       // 后台执行，不 await
-      runSegmentAnalysis(sessionId, roomId)
+      runSegmentAnalysis(sessionId, sRoomId)
         .then(() => {
           console.log(`[AutoAnalysis] 片段分析完成: session=${sessionId}, seq=${nextSeq}`);
         })
@@ -796,7 +826,7 @@ export async function checkAndRunScheduledAnalysis(): Promise<Array<{
           runningAnalyses.delete(sessionId);
         });
 
-      triggered.push({ sessionId, roomId, segmentSeq: nextSeq });
+      triggered.push({ sessionId, roomId: sRoomId, segmentSeq: nextSeq });
     }
   }
 
@@ -830,34 +860,35 @@ export async function getRecordingStatus(): Promise<Array<{
 
   const now = Date.now();
 
-  return sessions.map((s: {
-    id: number;
-    room_id: string;
-    room_name: string | null;
-    status: string;
-    start_time: string | null;
-    last_analysis_time: string | null;
-    last_snapshot_seq: number;
-  }) => {
-    const lastAnalysis = s.last_analysis_time ? new Date(s.last_analysis_time).getTime() : 0;
-    const startTime = s.start_time ? new Date(s.start_time).getTime() : 0;
+  return sessions.map((s: Record<string, unknown>) => {
+    // DbQueryBuilder 返回 camelCase 字段
+    const id = Number(s.id);
+    const roomId = String(s.roomId ?? s.room_id ?? '');
+    const roomName = s.roomName ?? s.room_name ?? null;
+    const status = String(s.status ?? '');
+    const startTimeStr = s.startTime ?? s.start_time ?? null;
+    const lastAnalysisTimeStr = s.lastAnalysisTime ?? s.last_analysis_time ?? null;
+    const lastSnapshotSeq = Number(s.lastSnapshotSeq ?? s.last_snapshot_seq ?? 0);
+
+    const lastAnalysis = lastAnalysisTimeStr ? new Date(String(lastAnalysisTimeStr)).getTime() : 0;
+    const startTime = startTimeStr ? new Date(String(startTimeStr)).getTime() : 0;
     const elapsed = lastAnalysis ? (now - lastAnalysis) : (now - startTime);
-    const nextIn = s.status === SESSION_STATUS.RECORDING
+    const nextIn = status === SESSION_STATUS.RECORDING
       ? Math.max(0, Math.round((intervalMs - elapsed) / 60000))
       : null;
 
     const recordingDuration = startTime ? Math.round((now - startTime) / 60000) : null;
 
     return {
-      sessionId: s.id,
-      roomId: s.room_id,
-      roomName: s.room_name,
-      status: s.status,
-      startTime: s.start_time,
-      lastAnalysisTime: s.last_analysis_time,
-      lastSnapshotSeq: s.last_snapshot_seq || 0,
+      sessionId: id,
+      roomId,
+      roomName,
+      status,
+      startTime: startTimeStr ? String(startTimeStr) : null,
+      lastAnalysisTime: lastAnalysisTimeStr ? String(lastAnalysisTimeStr) : null,
+      lastSnapshotSeq,
       nextAnalysisIn: nextIn,
-      isAnalyzing: runningAnalyses.has(s.id),
+      isAnalyzing: runningAnalyses.has(id),
       recordingDuration,
     };
   });
@@ -897,20 +928,25 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
   }
 
   for (const session of recordingSessions) {
-    const lastCheck = lastRealtimeCheck.get(session.id) || 0;
+    const sessionId = Number(getField(session, 'id'));
+    const sRoomId = String(getField(session, 'roomId', 'room_id'));
+    const sStartTime = getField<string | null>(session, 'startTime', 'start_time');
+    const sLiveSpaceId = String(getField(session, 'liveSpaceId', 'live_space_id') ?? '');
+
+    const lastCheck = lastRealtimeCheck.get(sessionId) || 0;
     const elapsed = now - lastCheck;
 
     if (elapsed < REALTIME_CHECK_INTERVAL_MS) continue;
 
     // 更新检查时间
-    lastRealtimeCheck.set(session.id, now);
+    lastRealtimeCheck.set(sessionId, now);
 
     try {
-      console.log(`[RealtimeAlert] 检查session=${session.id}, room=${session.room_id}, 距上次检查=${Math.round(elapsed / 60000)}分钟`);
+      console.log(`[RealtimeAlert] 检查session=${sessionId}, room=${sRoomId}, 距上次检查=${Math.round(elapsed / 60000)}分钟`);
 
       // 抓取最新实时数据
-      const roomId = session.room_id;
-      const liveSpaceId = session.live_space_id || '';
+      const roomId = sRoomId;
+      const liveSpaceId = sLiveSpaceId;
 
       // 并行获取多个数据源
       const [analysisData, chartData, newoldData] = await Promise.allSettled([
@@ -937,11 +973,11 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
       const { data: recentAlerts } = await client
         .from('live_alerts')
         .select('alert_type, title')
-        .eq('session_id', session.id)
+        .eq('session_id', sessionId)
         .order('created_at', { ascending: false })
         .limit(10);
 
-      const recentAlertTypes = new Set((recentAlerts || []).map((a: { alert_type: string; title: string }) => `${a.alert_type}:${a.title}`));
+      const recentAlertTypes = new Set((recentAlerts || []).map((a: Record<string, unknown>) => `${getField(a, 'alertType', 'alert_type')}:${getField(a, 'title')}`));
 
       // 基于规则的实时预警检测
       const newAlerts: Array<{
@@ -955,12 +991,12 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
       const prevMetrics = await client
         .from('live_metrics_minute')
         .select('online_count')
-        .eq('session_id', session.id)
+        .eq('session_id', sessionId)
         .order('minute_index', { ascending: false })
         .limit(5);
 
       if (prevMetrics.data && prevMetrics.data.length >= 3) {
-        const recentOnline = prevMetrics.data.map((m: { online_count: number }) => m.online_count);
+        const recentOnline = prevMetrics.data.map((m: Record<string, unknown>) => Number(getField(m, 'onlineCount', 'online_count') || 0));
         const avgOnline = recentOnline.reduce((a: number, b: number) => a + b, 0) / recentOnline.length;
         if (avgOnline > 0 && currentData.online < avgOnline * 0.7 && currentData.online > 0) {
           const alertKey = `online_drop:在线人数骤降`;
@@ -992,12 +1028,12 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
       const prevAmount = await client
         .from('live_metrics_minute')
         .select('paid_amount')
-        .eq('session_id', session.id)
+        .eq('session_id', sessionId)
         .order('minute_index', { ascending: false })
         .limit(10);
 
       if (prevAmount.data && prevAmount.data.length >= 5) {
-        const amounts = prevAmount.data.map((m: { paid_amount: number }) => m.paid_amount || 0);
+        const amounts = prevAmount.data.map((m: Record<string, unknown>) => Number(getField(m, 'paidAmount', 'paid_amount') || 0));
         const recentSum = amounts.slice(0, 3).reduce((a: number, b: number) => a + b, 0);
         const olderSum = amounts.slice(3).reduce((a: number, b: number) => a + b, 0);
         if (olderSum > 0 && recentSum < olderSum * 0.2) {
@@ -1031,30 +1067,30 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
 
       // 规则5: 在线人数异常增长（可能被推流，是正向信号）
       if (prevMetrics.data && prevMetrics.data.length >= 3) {
-        const recentOnline = prevMetrics.data.map((m: { online_count: number }) => m.online_count);
-        const avgOnline = recentOnline.reduce((a: number, b: number) => a + b, 0) / recentOnline.length;
-        if (avgOnline > 0 && currentData.online > avgOnline * 1.5) {
+        const recentOnline2 = prevMetrics.data.map((m: Record<string, unknown>) => Number(getField(m, 'onlineCount', 'online_count') || 0));
+        const avgOnline2 = recentOnline2.reduce((a: number, b: number) => a + b, 0) / recentOnline2.length;
+        if (avgOnline2 > 0 && currentData.online > avgOnline2 * 1.5) {
           const alertKey = `online_surge:在线人数激增`;
           if (!recentAlertTypes.has(alertKey)) {
             newAlerts.push({
               alertType: 'online_surge',
               severity: 'low',
               title: '在线人数激增',
-              description: `在线人数从平均${Math.round(avgOnline)}人激增至${currentData.online}人，增幅${Math.round((currentData.online / avgOnline - 1) * 100)}%，可能获得推流推荐`,
+              description: `在线人数从平均${Math.round(avgOnline2)}人激增至${currentData.online}人，增幅${Math.round((currentData.online / avgOnline2 - 1) * 100)}%，可能获得推流推荐`,
             });
           }
         }
       }
 
       // 保存新预警到数据库
-      const startTime = session.start_time ? new Date(session.start_time).getTime() : now;
+      const startTime = sStartTime ? new Date(sStartTime).getTime() : now;
       const offsetMinutes = Math.round((now - startTime) / 60000);
 
       if (newAlerts.length > 0) {
 
         for (const alert of newAlerts) {
           const alertRecord = {
-            session_id: session.id,
+            session_id: sessionId,
             alert_type: alert.alertType,
             severity: alert.severity,
             title: alert.title,
@@ -1073,11 +1109,11 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
           if (insertError) {
             console.error(`[RealtimeAlert] 保存预警失败:`, insertError);
           } else {
-            console.log(`[RealtimeAlert] 新预警: session=${session.id}, type=${alert.alertType}, severity=${alert.severity}`);
+            console.log(`[RealtimeAlert] 新预警: session=${sessionId}, type=${alert.alertType}, severity=${alert.severity}`);
           }
         }
 
-        triggered.push({ sessionId: session.id, alertCount: newAlerts.length });
+        triggered.push({ sessionId, alertCount: newAlerts.length });
       }
 
       // 同时记录分钟级metrics
@@ -1085,7 +1121,7 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
       await client
         .from('live_metrics_minute')
         .upsert({
-          session_id: session.id,
+          session_id: sessionId,
           minute_index: minuteIndex,
           online_count: currentData.online,
           comment_count: currentData.comments,
@@ -1097,7 +1133,7 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
         }, { onConflict: 'session_id,minute_index' });
 
     } catch (err) {
-      console.error(`[RealtimeAlert] 检查session=${session.id}失败:`, err instanceof Error ? err.message : err);
+      console.error(`[RealtimeAlert] 检查session=${sessionId}失败:`, err instanceof Error ? err.message : err);
     }
   }
 
