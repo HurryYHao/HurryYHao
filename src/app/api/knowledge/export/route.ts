@@ -114,15 +114,15 @@ export async function GET(request: NextRequest) {
 
       for (const script of scriptsData) {
         children.push(new Paragraph({
-          children: [new TextRun({ text: `${script.anchor_name || '未知'} - ${script.session_date || ''}`, bold: true, size: 24, color: '2E86C1' })],
+          children: [new TextRun({ text: `${script.anchorName || '未知'} - ${script.sessionDate || ''}`, bold: true, size: 24, color: '2E86C1' })],
           heading: HeadingLevel.HEADING_2,
           spacing: { before: 200, after: 100 },
         }));
 
-        if (script.script_content) {
-          const content = typeof script.script_content === 'string'
-            ? script.script_content
-            : JSON.stringify(script.script_content, null, 2);
+        if (script.scriptContent) {
+          const content = typeof script.scriptContent === 'string'
+            ? script.scriptContent
+            : JSON.stringify(script.scriptContent, null, 2);
           for (const line of content.split('\n')) {
             if (line.trim()) {
               children.push(new Paragraph({

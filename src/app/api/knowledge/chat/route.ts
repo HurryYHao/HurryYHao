@@ -189,11 +189,11 @@ async function buildScriptsContext(): Promise<string> {
     if (scriptsData.length === 0) return '（暂无历史脚本）';
 
     return scriptsData.map((s: any) => {
-      const parts = [`📅 ${s.session_date} | ${s.anchor_name || '未知主播'}`];
+      const parts = [`📅 ${s.sessionDate} | ${s.anchorName || '未知主播'}`];
       if (s.keywords) parts.push(`  关键词: ${String(s.keywords).substring(0, 100)}`);
-      if (s.content_points) parts.push(`  内容: ${String(s.content_points).substring(0, 150)}`);
-      if (s.product_list) parts.push(`  商品: ${String(s.product_list).substring(0, 100)}`);
-      if (s.transaction_data) parts.push(`  成交: ${String(s.transaction_data).substring(0, 80)}`);
+      if (s.contentPoints) parts.push(`  内容: ${String(s.contentPoints).substring(0, 150)}`);
+      if (s.productList) parts.push(`  商品: ${String(s.productList).substring(0, 100)}`);
+      if (s.transactionData) parts.push(`  成交: ${String(s.transactionData).substring(0, 80)}`);
       return parts.join('\n');
     }).join('\n\n');
   } catch {

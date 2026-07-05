@@ -13,16 +13,16 @@ export async function GET() {
     // config_value 中存的是完整备份JSON，只返回元信息（不返回snapshot_json）
     let lastBackup: Record<string, unknown> | null = null;
     const configData = config as any;
-    if (configData?.config_value) {
+    if (configData?.configValue) {
       try {
-        const parsed = JSON.parse(configData.config_value);
+        const parsed = JSON.parse(configData.configValue);
         lastBackup = {
           timestamp: parsed.timestamp,
           knowledge_count: parsed.knowledge_count,
           scripts_count: parsed.scripts_count,
         };
       } catch {
-        lastBackup = { raw: configData.config_value };
+        lastBackup = { raw: configData.configValue };
       }
     }
 

@@ -1255,7 +1255,7 @@ export async function checkAndRunRealtimeAlerts(): Promise<Array<{
 当前在线：${currentData.online}人，累计观看人数：${currentData.viewers}人
 评论数：${currentData.comments}条（注意：评论数≠评论人数，评论数是总条数）
 成交金额：¥${currentData.amount.toFixed(2)}
-新粉转化率：${(currentData.newFanConversionRate * 100).toFixed(1)}%，老粉转化率：${(currentData.oldFanConversionRate * 100).toFixed(1)}%
+新粉转化率：${currentData.newFanConversionRate.toFixed(1)}%，老粉转化率：${currentData.oldFanConversionRate.toFixed(1)}%
 新粉成交：${currentData.newFans}人，老粉成交：${currentData.oldFans}人
 
 请严格按JSON格式返回分析结果：
