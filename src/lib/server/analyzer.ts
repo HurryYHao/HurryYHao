@@ -92,28 +92,64 @@ const ANALYSIS_FRAMEWORK = `# 私域直播数据分析框架
 首先是 Markdown 格式的具体分析文本，然后在末尾输出 JSON 格式的结构化数据（必须包含在 \`\`\`json 代码块中）。
 
 ### 1. Markdown 格式要求
-每个维度独立段落，使用 Markdown 格式。包含具体数据引用和分析。
-- 综合表现总览
-- ### 主播话术与内容结构
-- ### 互动热度与观众参与
-- ### 商品转化与销售节奏
-- ### 评论舆情与观众画像
-- ### 直播节奏与流量效率
+每个维度必须严格按以下结构输出：
+
+\`\`\`
+## 主播话术与内容结构
+
+#### 核心发现
+1. **发现标题**：具体内容，必须引用数据表中的具体数值和时间段。例如"20:52主播讲解完XX产品福利后，20:55商品点击量从0跳至128，支付人数同步增长6人"。【历史对比】【前场对比】【基准对比】标注
+2. **发现标题**：...
+3. **发现标题**：...
+
+#### 评分
+整体得分：X分（子维度1 X分、子维度2 X分、子维度3 X分、...）
+
+#### 改进建议
+1. 具体建议内容，必须包含预期效果。例如"增加逼单话术频次，参考历史峰值场次的催单逻辑，预计可提升15%下单转化率"
+2. ...
+\`\`\`
+
+**各维度的必须子项：**
+
+**维度一：主播话术与内容结构**
+- 核心发现：话术结构占比（痛点唤醒X%、技巧科普X%、产品种草X%、逼单转化X%）、转化关联（哪个话术后成交涨、涨了多少）、新老粉话术匹配度
+- 评分子维度：共情力X分、痛点挖掘X分、场景还原X分、逼单话术X分
+- 改进建议：含预期提升百分比
+
+**维度二：互动热度与观众参与**
+- 核心发现：整体数据（互动率、评论量、每分钟评论量）、时间分布（互动高峰1/2含具体时段+话术+评论量、互动低谷含时段+原因）、互动类型占比
+- 评分子维度：互动设计X分、峰值运营X分、低谷留存X分
+- 改进建议：含预期提升百分比
+
+**维度三：商品转化与销售节奏**
+- 核心发现：整体业绩（总成交额+与历史对比百分比）、商品漏斗表格（商品名称|价格|点击→下单率|下单→支付率|历史平均|流失环节）、新老粉转化对比、支付特征
+- 评分子维度：漏斗效率X分、客单价表现X分、新粉转化X分、老粉转化X分
+- 改进建议：含预期提升百分比
+
+**维度四：评论舆情与观众画像**
+- 核心发现：情绪分布（正面/负面/提问占比+与历史对比）、高频问题归类（使用方法/效果质量/物流售后/价格各占百分比+典型评论含时间戳）、负面预警条数与分类、评论爆发节点
+- 评分子维度：舆情健康度X分、问题响应效率X分、诉求匹配度X分
+- 改进建议：含预期提升百分比
+
+**维度五：直播节奏与效率分析**
+- 核心发现：流量波动（高峰时段+峰值+对应内容、低谷时段+流失率+原因）、内容时间占比（痛点唤醒X分钟占X%、技巧科普X分钟占X%、产品讲解X分钟占X%、互动答疑X分钟占X%）、转化与节奏关联（首个转化高峰+成交占比、第二个转化高峰+成交占比）
+- 评分子维度：流量峰值运营X分、低谷留存X分、节奏配比X分
+- 改进建议：含预期提升百分比
 
 ### 2. 分析深度要求（必须严格遵守）
-- 评论时间精确到分秒，定位互动爆发的具体时间点
-- 关联话术与数据涨跌（哪个话术后流量/成交/互动明显变化，标注具体时间段）
-- 商品漏斗要分析每个环节的流失率并给出针对性建议
-- **话术分析必须识别"内容→产品"交替推进模式**：心法→产品1→技巧→产品2→深层技巧→产品3，每个产品的引入时机、衔接话术、成交效果
-- 评论舆情要用真实评论样本分析，不要泛泛而谈
-- 流量高峰低谷要标注具体时间段
-- 对比历史脚本和成交基准，识别当前直播与过往的差异和改进点
-- 基于历史成交数据，评估当前商品组合和话术的转化效果
-- 必须与前一场直播对比，标注【前场对比】
-- 必须与核心基准主播对比，标注【基准对比】
+- **数据引用**：每条核心发现必须引用数据表中的具体数值，不得泛泛而谈。格式："XX时间XX事件后，XX指标从X跳至X，变化了X%"
+- **时间戳精度**：评论引用精确到分秒（HH:MM:SS），如 22:32:51「怎么用呀？」
+- **关联话术与数据涨跌**：必须标注"哪个话术后流量/成交/互动明显变化，变化了多少"
+- **商品漏斗表格化**：每个商品单独一行，含价格、点击→下单率、下单→支付率、历史平均对比、流失环节
+- **话术分析必须识别"内容→产品"交替推进模式**：心法→产品1→技巧→产品2→深层技巧→产品3
+- **评论舆情用真实评论样本**：典型评论必须含时间戳和用户名，不得只写"有用户说"
+- **流量高峰低谷标注具体时间段**：如"20:00-20:30"而非"开场"
+- **对比必须量化**：【历史对比】"较X月X日场次提升X个百分点"，【前场对比】"总成交额较上一场上涨X%"，【基准对比】"与雅文老师人均产值差距X元"
+- **改进建议必须含预期效果**：每条建议必须包含"预计可提升X%"
 
 ### 3. 标记规范
-- 评分明确标注：话术评分：X/10，互动评分：X/10，转化评分：X/10，舆情评分：X/10，节奏评分：X/10，综合评分：X/10
+- 评分明确标注：话术评分：X/10（共情力X分、痛点挖掘X分、场景还原X分、逼单话术X分），互动评分：X/10（互动设计X分、峰值运营X分、低谷留存X分），转化评分：X/10（漏斗效率X分、客单价表现X分、新粉转化X分、老粉转化X分），舆情评分：X/10（舆情健康度X分、问题响应效率X分、诉求匹配度X分），节奏评分：X/10（流量峰值运营X分、低谷留存X分、节奏配比X分），综合评分：X/10
 - 预警项用 ⚠️【预警】标记
 - 改进建议以"建议："/"优化："/"改进："开头，单独一行
 - 亮点以 ✅ 标记
@@ -378,7 +414,7 @@ async function buildKnowledgeContext(): Promise<string> {
   const { data, error } = await client
     .from('analysis_knowledge')
     .select('category, dimension, key, value, confidence, sample_count')
-    .gte('confidence', 2)  // 只使用被验证2次以上的知识
+    .gte('confidence', 3)  // 只使用被验证3次以上的知识（提高质量门槛）
     .order('confidence', { ascending: false });
 
   if (error || !data || data.length === 0) return '';
@@ -748,7 +784,7 @@ async function getHistoricalScripts(): Promise<string> {
     .from('live_scripts')
     .select('*')
     .order('id', { ascending: false })
-    .limit(50);
+    .limit(10);  // 只取最近10场，避免prompt过长
 
   if (error || !scripts || scripts.length === 0) return '';
 
@@ -756,21 +792,23 @@ async function getHistoricalScripts(): Promise<string> {
     const sd = s.sessionDate ?? s.session_date;
     const an = s.anchorName ?? s.anchor_name;
     const kw = s.keywords;
-    const cp = s.contentPoints ?? s.content_points;
+    // 只保留关键词和产品清单的精简版，不再展开完整内容
     const pl = s.productList ?? s.product_list;
+    // 成交数据只保留摘要
     const td = s.transactionData ?? s.transaction_data;
     const rt = s.replayTransaction ?? s.replay_transaction;
     const parts = [`场次: ${sd}`];
     if (an) parts.push(`主播: ${an}`);
     if (kw) parts.push(`关键词: ${kw}`);
-    if (cp) parts.push(`内容要点:\n${cp}`);
-    if (pl) parts.push(`产品清单:\n${pl}`);
-    if (td) parts.push(`成交数据:\n${td}`);
-    if (rt) parts.push(`录播成交: ${rt}`);
+    // 产品清单：只保留前200字
+    if (pl) parts.push(`产品清单:\n${String(pl).slice(0, 200)}${String(pl).length > 200 ? '...(精简)' : ''}`);
+    // 成交数据：只保留前300字
+    if (td) parts.push(`成交数据:\n${String(td).slice(0, 300)}${String(td).length > 300 ? '...(精简)' : ''}`);
+    if (rt) parts.push(`录播成交: ${String(rt).slice(0, 100)}`);
     return parts.join('\n');
   }).join('\n---\n');
 
-  return `【历史直播脚本与成交数据参考】\n以下为过往直播的脚本大纲和成交数据，用于对比分析当前直播表现、识别话术模式、建立成交基准线：\n\n${scriptText}`;
+  return `【历史直播脚本与成交数据参考（最近10场精简版）】\n以下为过往直播的脚本大纲和成交数据摘要，用于对比分析当前直播表现：\n\n${scriptText}`;
 }
 
 /**
@@ -786,7 +824,7 @@ async function getProductBenchmarks(): Promise<string> {
     .in('dimension', ['conversion', 'general'])
     .gte('confidence', 2)
     .order('sample_count', { ascending: false })
-    .limit(30);
+    .limit(15);  // 限制条数，避免过长
 
   if (error || !benchmarks || benchmarks.length === 0) return '';
 
@@ -794,14 +832,14 @@ async function getProductBenchmarks(): Promise<string> {
   for (const b of benchmarks) {
     const dim = b.dimension as string;
     if (!grouped[dim]) grouped[dim] = [];
-    grouped[dim].push(`- ${b.key}: ${b.value} (置信度${b.confidence}, ${b.sample_count}次验证)`);
+    grouped[dim].push(`- ${b.key}: ${b.value}`);
   }
 
   const text = Object.entries(grouped)
     .map(([dim, items]) => `### ${dim === 'conversion' ? '商品转化' : '通用'}基准\n${items.join('\n')}`)
     .join('\n\n');
 
-  return `【商品成交基准数据】\n${text}`;
+  return `【商品成交基准数据（精简版）】\n${text}`;
 }
 
 function buildAnalysisDataMarkdown(
@@ -942,8 +980,110 @@ function buildAnalysisDataMarkdown(
 }
 
 /**
- * 构建评论摘要数据（终场分析用，避免prompt超长）
+ * 构建终场分析精简数据（避免prompt超长）
+ * 核心策略：只保留最后一份快照的累计指标，合并去重评论和时序数据
  */
+function buildFinalCondensedDataMarkdown(
+  snapshotData: Record<string, unknown>[],
+  sessionStartTime: string | null = null,
+): string {
+  if (snapshotData.length === 0) return '无数据';
+
+  const sections: string[] = [];
+  sections.push(`# 直播数据资料 - 终场综合（精简版）`);
+  sections.push(`\n> 生成时间: ${new Date().toISOString()}`);
+  sections.push(`> 快照数量: ${snapshotData.length}份（数据为累计值，取最后快照）\n`);
+
+  // === 1. 核心指标：只取最后一份快照（累计值） ===
+  const lastSnap = snapshotData[snapshotData.length - 1];
+  const lastRawJson = (lastSnap.rawJson ?? lastSnap.raw_json) as Record<string, unknown> | null;
+  if (lastRawJson) {
+    const analysis = (lastRawJson.analysis as Record<string, unknown>) || {};
+    const orderSummary = (lastRawJson.orderSummary as Record<string, unknown>) || {};
+    const newoldData = (lastRawJson.newoldData as Record<string, string>) || {};
+
+    const onlineCount = analysis.peakConcurrentViewers || 'N/A';
+    const watcherCnt = analysis.watcherCnt || 'N/A';
+    const viewCnt = analysis.viewCnt || 'N/A';
+    const commentCnt = analysis.commentCnt || 'N/A';
+    const commenterCnt = analysis.commenterCnt || 'N/A';
+    const interactionRate = analysis.interactionRate || 'N/A';
+    const productClickCnt = analysis.productClickCnt || 'N/A';
+    const mallPageViewCnt = analysis.mallPageViewCnt || 'N/A';
+    const transactionAmount = analysis.transactionAmount || orderSummary.totalAmount || 'N/A';
+    const transactionCnt = analysis.transactionCnt || orderSummary.paySuccessTotal || 'N/A';
+    const payUserCnt = analysis.payUserCnt || orderSummary.payUserTotal || 'N/A';
+    const avgWatchTime = analysis.avgWatchTime || 'N/A';
+
+    sections.push(`## 核心指标（终场累计）`);
+    sections.push(`| 指标 | 数值 |`);
+    sections.push(`|------|------|`);
+    sections.push(`| 峰值在线人数 | ${onlineCount} |`);
+    sections.push(`| 累计观看人数(场观) | ${watcherCnt} |`);
+    sections.push(`| 累计观看人次 | ${viewCnt} |`);
+    sections.push(`| 评论数(条) | ${commentCnt} |`);
+    sections.push(`| 评论人数(人) | ${commenterCnt} |`);
+    sections.push(`| 互动率 | ${interactionRate}% |`);
+    sections.push(`| 商品点击次数 | ${productClickCnt} |`);
+    sections.push(`| 商城浏览次数 | ${mallPageViewCnt} |`);
+    sections.push(`| 成交总额 | ¥${transactionAmount} |`);
+    sections.push(`| 成交单数 | ${transactionCnt} |`);
+    sections.push(`| 支付人数 | ${payUserCnt} |`);
+    sections.push(`| 人均产值(成交/场观) | ${Number(watcherCnt) > 0 && Number(transactionAmount) > 0 ? '¥' + (Number(transactionAmount) / Number(watcherCnt)).toFixed(2) : 'N/A'} |`);
+    sections.push(`| 平均观看时长 | ${avgWatchTime}秒 |`);
+
+    // 新老粉数据
+    sections.push(`\n## 新老粉数据`);
+    sections.push(`**新学员:** 观看${newoldData.nwatcherCnt || 'N/A'}人 / 支付${newoldData.ntransactionUserCnt || 'N/A'}人 / 转化率${newoldData.nconversionRate || 'N/A'}% / 观看≥30min ${newoldData.nwatcher30Cnt || 'N/A'}人`);
+    sections.push(`**老学员:** 观看${newoldData.owatcherCnt || 'N/A'}人 / 支付${newoldData.otransactionUserCnt || 'N/A'}人 / 转化率${newoldData.oconversionRate || 'N/A'}% / 观看≥30min ${newoldData.owatcher30Cnt || 'N/A'}人`);
+  }
+
+  // === 2. 时间曲线数据：只取最后一份快照（含全场时序） ===
+  if (lastRawJson) {
+    const chartData = (lastRawJson.chartData as Record<string, unknown>) || {};
+    sections.push(`\n## 时间曲线数据（全场分钟级）`);
+    sections.push(extractChartWindow(chartData, null, null));
+  }
+
+  // === 3. 商品漏斗数据：合并所有快照的订单数据（去重） ===
+  const allOrderDetails: Record<string, unknown>[] = [];
+  const seenOrderIds = new Set<string>();
+  for (const snap of snapshotData) {
+    const rawJson = (snap.rawJson ?? snap.raw_json) as Record<string, unknown> | null;
+    if (!rawJson) continue;
+    const orderDetails = (rawJson.orderDetails as Record<string, unknown>[]) || [];
+    for (const o of orderDetails) {
+      // 用 goodsName+payStatus 去重（避免同一订单在多个快照中重复）
+      const key = `${o.goodsName || o.productName}_${o.payStatus}_${o.payPrice || o.payAmount}`;
+      if (!seenOrderIds.has(key)) {
+        seenOrderIds.add(key);
+        allOrderDetails.push(o);
+      }
+    }
+  }
+  sections.push(`\n## 商品漏斗数据(点击→下单→支付)`);
+  sections.push(buildGoodsFunnel(allOrderDetails));
+
+  // === 4. 评论数据：合并所有快照的评论（去重） ===
+  const allComments: Record<string, unknown>[] = [];
+  const seenCommentKeys = new Set<string>();
+  for (const snap of snapshotData) {
+    const rawJson = ((snap.rawJson ?? snap.raw_json) as Record<string, unknown> | null) || {};
+    const comments = (rawJson.comments as Record<string, unknown>[]) || [];
+    for (const c of comments) {
+      // 用 timestamp+nickname+content 去重
+      const key = `${c.timestamp}_${c.nickname}_${String(c.content || '').slice(0, 20)}`;
+      if (!seenCommentKeys.has(key)) {
+        seenCommentKeys.add(key);
+        allComments.push(c);
+      }
+    }
+  }
+  sections.push(`\n## 评论舆情数据（全场合并，共${allComments.length}条）`);
+  sections.push(buildCommentsDataFull(allComments, null, null));
+
+  return sections.join('\n');
+}
 function buildCommentsDataSummary(
   comments: Record<string, unknown>[],
 ): string {
@@ -1178,10 +1318,20 @@ ${previousSessionComparison ? `${previousSessionComparison}\n---\n\n` : ''}${ben
 
 ---
 
-请严格按照上述五维分析框架输出分析结果。每个维度需包含：
-1. **核心发现**（基于具体数据，**必须引用数据源中的具体数值**，与历史脚本/成交基准对比）
-2. **评分**（1-10分，格式：话术评分：X/10，互动评分：X/10，转化评分：X/10，舆情评分：X/10，节奏评分：X/10，综合评分：X/10）
-3. **具体改进建议**（可执行、有针对性，以"建议："/"优化："/"改进："开头，单独一行）
+请严格按照上述五维分析框架输出分析结果。每个维度必须按以下结构输出：
+
+**## 维度标题**
+
+**#### 核心发现**
+1. **发现标题**：具体内容，必须引用数据表中的具体数值和时间段。例如"20:52主播讲解完XX产品福利后，20:55商品点击量从0跳至128，支付人数同步增长6人"。【历史对比】【前场对比】【基准对比】标注
+2. ...
+
+**#### 评分**
+整体得分：X分（子维度1 X分、子维度2 X分、...）
+
+**#### 改进建议**
+1. 具体建议内容，必须包含预期效果。例如"增加逼单话术频次，预计可提升15%下单转化率"
+2. ...
 
 特别注意：
 - **绝对禁止出现以下表述**：❌"数据缺失" ❌"无数据" ❌"无实时数据" ❌"因缺少" ❌"无法量化" ❌"无语音转写" ❌"缺少语音转写" ❌"无评论数据" ❌"无成交数据" ❌"无互动率" ❌"无法完成" ❌"无法分析"。上面的markdown数据表格已经包含所有快照数据，你必须直接引用表格中的具体数值。如果某个指标在表格中确实是0，写"该指标值为0"并分析原因。
@@ -1192,28 +1342,26 @@ ${previousSessionComparison ? `${previousSessionComparison}\n---\n\n` : ''}${ben
 - **识别直播阶段结构**：根据片段序号判断当前处于开场暖场→情感痛点→心理理论→实操演示→产品植入→互动促单→收尾中的哪个阶段
 - **话术策略识别**：按"心法→产品1→技巧→产品2→深层技巧→产品3"交替推进模式分析，每个"内容→产品"循环中：痛点共情→心理解读→产品衔接→逼单促转，分析每种话术对数据的拉动效果和产品推出的时机是否恰当
 - **教学→产品衔接分析**：主播如何从心理课/实操课自然过渡到产品推荐，衔接是否流畅
-- 评论时间精确到分秒，定位互动爆发的具体时间点，关联对应话术
-- 关联话术与数据涨跌（哪个话术后成交/互动明显变化）
-- 商品漏斗要分析每个环节的流失率并给出针对性建议
-- 评论舆情要用真实评论样本分析，不要泛泛而谈
+- **评论引用必须含时间戳**：如 22:32:51「怎么用呀？」，不得只写"有用户说"
+- **关联话术与数据涨跌**：必须标注"哪个话术后成交/互动从X变到X，变化了X%"
+- **商品漏斗表格化**：每个商品单独一行，含价格、点击→下单率、下单→支付率、历史平均对比、流失环节
+- **流量高峰低谷标注具体时间段**：如"20:00-20:30"而非"开场"
+- **对比必须量化**：【历史对比】"较X月X日场次提升X个百分点"，【前场对比】"总成交额较上一场上涨X%"，【基准对比】"与雅文老师人均产值差距X元"
+- **改进建议必须含预期效果**：每条建议必须包含"预计可提升X%"
 - **观众画像提取**：从评论中判断观众群体特征（年龄段、婚恋状况、核心痛点）
-- 数据波动要标注具体时间段
 - **新粉占比高是私域社群裂变效果好的正向信号，不是问题**
-- **对比历史脚本和成交基准，识别当前直播与过往的差异和改进点**
-- **基于历史成交数据，评估当前商品组合和话术的转化效果**
-${previousSessionComparison ? `- **必须与前一场直播对比，标注【前场对比】**，指出进步和退步的地方` : ''}${benchmarkAnchorData ? `- **必须与核心基准主播（雅文老师）对比，标注【基准对比】**，指出差距和追赶建议` : ''}
 
 输出格式要求：
 - 请严格遵守前面定义的 Markdown + JSON 混合输出格式
 - 文本分析必须在前面，JSON 结构必须在最后，并用 \`\`\`json 包裹
-- 文本部分中，每个维度使用 ### 标题
-- 包含具体数据引用（直接引用数据表中的数值）
-- 评分明确标注：话术评分：X/10，互动评分：X/10，转化评分：X/10，舆情评分：X/10，节奏评分：X/10，综合评分：X/10
+- 文本部分中，每个维度使用 ## 标题，核心发现/评分/改进建议使用 #### 标题
+- 包含具体数据引用（直接引用数据表中的数值和时间点）
+- 评分含子维度：话术评分：X/10（共情力X分、痛点挖掘X分、场景还原X分、逼单话术X分），互动评分：X/10（互动设计X分、峰值运营X分、低谷留存X分），转化评分：X/10（漏斗效率X分、客单价表现X分、新粉转化X分、老粉转化X分），舆情评分：X/10（舆情健康度X分、问题响应效率X分、诉求匹配度X分），节奏评分：X/10（流量峰值运营X分、低谷留存X分、节奏配比X分），综合评分：X/10
 - 预警项用 ⚠️【预警】标记
 - 亮点用 ✅ 标记
 - 改进建议以"建议："/"优化："/"改进："开头，单独一行
 - 与历史数据对比时标注【历史对比】
-${previousSessionComparison ? '- 与前一场对比时标注【前场对比】，必须包含人均产值(成交/场观)对比' : ''}${benchmarkAnchorData ? '- 与核心基准对比时标注【基准对比】，必须包含差距分析和追赶建议' : ''}
+${previousSessionComparison ? '- 与前一场对比时标注【前场对比】，必须包含人均产值(成交/场观)对比和具体变化百分比' : ''}${benchmarkAnchorData ? '- 与核心基准对比时标注【基准对比】，必须包含差距分析和追赶建议' : ''}
 `;
 }
 
@@ -2160,7 +2308,11 @@ async function _runAnalysisImpl(
 
     if (transcriptionParts.length > 0) {
       const fullTranscription = transcriptionParts.join('\n\n');
-      console.log(`[runAnalysis] 终场分析第一步：提取话术大纲，转写总长=${fullTranscription.length}字符`);
+      // 大纲提取只需理解话术结构，截断到30000字符避免prompt超长
+      const truncatedTranscription = fullTranscription.length > 30000
+        ? fullTranscription.substring(0, 30000) + '\n\n[转写已截断，仅保留前30000字符用于大纲提取]'
+        : fullTranscription;
+      console.log(`[runAnalysis] 终场分析第一步：提取话术大纲，转写总长=${fullTranscription.length}字符，截断后=${truncatedTranscription.length}字符`);
 
       const outlinePrompt = `你是一个专业的私域直播分析师。请阅读以下整场直播的语音转写文字，提取出话术大纲。
 
@@ -2182,7 +2334,7 @@ async function _runAnalysisImpl(
 
 ---
 
-${fullTranscription}`;
+${truncatedTranscription}`;
 
       try {
         scriptOutline = await callLLMAnalysis(outlinePrompt);
@@ -2197,12 +2349,18 @@ ${fullTranscription}`;
   }
 
   // 构建完整数据 Markdown
-  const dataMarkdown = buildAnalysisDataMarkdown(
-    analysisSnapshots.length > 0 ? analysisSnapshots : snapshots,
-    reportType,
-    segmentSeq,
-    sessionStartTime
-  );
+  // 终场分析使用精简版数据（只保留最后一份快照累计指标+合并评论/时序），避免prompt超长
+  const dataMarkdown = reportType === REPORT_TYPE.FINAL
+    ? buildFinalCondensedDataMarkdown(
+        analysisSnapshots.length > 0 ? analysisSnapshots : snapshots,
+        sessionStartTime
+      )
+    : buildAnalysisDataMarkdown(
+        analysisSnapshots.length > 0 ? analysisSnapshots : snapshots,
+        reportType,
+        segmentSeq,
+        sessionStartTime
+      );
 
   // 构建分析指令 Prompt（不含完整数据）
   const analysisPrompt = buildAnalysisPrompt(
