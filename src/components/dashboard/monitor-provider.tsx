@@ -44,26 +44,28 @@ export function useMonitor() {
 
 /* ---------- Provider ---------- */
 export function MonitorProvider({ children }: { children: React.ReactNode }) {
-  // 从 localStorage 读取初始状态，默认为 true
-  const [polling, setPolling] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('monitor-polling');
-      return saved !== 'false'; // 默认开启
-    }
-    return true;
-  });
+  // 始终用 true 初始化（避免 hydration mismatch），在 useEffect 中读取 localStorage
+  const [polling, setPolling] = useState(true);
+  const [hydrated, setHydrated] = useState(false);
   const [manualLoading, setManualLoading] = useState(false);
   const [activeSessions, setActiveSessions] = useState<SessionInfo[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [lastPollTime, setLastPollTime] = useState<Date | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // 挂载后从 localStorage 恢复状态（避免 hydration mismatch）
+  useEffect(() => {
+    const saved = localStorage.getItem('monitor-polling');
+    if (saved === 'false') setPolling(false);
+    setHydrated(true);
+  }, []);
+
   // 保存状态到 localStorage
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    if (hydrated) {
       localStorage.setItem('monitor-polling', String(polling));
     }
-  }, [polling]);
+  }, [polling, hydrated]);
 
   const addLog = useCallback((level: string, message: string) => {
     setLogs(prev => [...prev.slice(-199), { time: new Date().toLocaleTimeString('zh-CN'), level, message }]);
