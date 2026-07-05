@@ -642,17 +642,24 @@ export async function getTokenStatus(): Promise<{ hasToken: boolean; expiresAt: 
 }
 
 /**
- * 获取有效的管理页 Token（自动刷新）
+ * 获取管理页 Token（优先缓存，过期也返回让服务端判断，只在完全没有 token 时才登录）
  */
 export async function getAdminToken(verbose: boolean = false): Promise<string> {
-  const stored = await getStoredToken();
+  // 1. 先查内存缓存
+  const cached = memoryTokenCache.get('admin');
+  if (cached?.token) {
+    return cached.token;
+  }
 
-  // Token 有效且未到刷新阈值
-  if (stored && stored.expiresAt > Date.now() + CONFIG.tokenRefreshThresholdSeconds * 1000) {
+  // 2. 查数据库缓存（过期也返回，由服务端 401 触发重新登录）
+  const stored = await getStoredToken();
+  if (stored?.token) {
+    memoryTokenCache.set('admin', stored);
     return stored.token;
   }
 
-  // 需要刷新 - 重新登录
+  // 3. 完全没有 token（首次启动或被清除），才触发登录
+  if (verbose) console.log('[Auth] 无缓存 Token，需要登录...');
   const loginResult = await login(false, verbose);
   return loginResult.token;
 }
@@ -713,12 +720,14 @@ export async function adminApiRequest<T = unknown>(
   });
 
   if (response.status === 401) {
-    // Token 过期，清除并重试一次
+    // Token 失效，强制重新登录
     const client = getSupabaseClient();
     await client.from('system_config').delete().eq('config_key', TOKEN_KEY);
+    memoryTokenCache.delete('admin');
 
-    const newToken = await getAdminToken(true); // 启用详细日志
-    headers.token = newToken;
+    // 强制重新登录（跳过退避检查中的非force判断）
+    const loginResult = await login(true, true);
+    headers.token = loginResult.token;
 
     const retryResponse = await fetch(url, {
       method,
